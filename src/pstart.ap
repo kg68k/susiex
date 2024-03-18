@@ -1,0 +1,6 @@
+		.text
+PSTART::
+		.bss
+BSSSTART::
+		.stack
+STACKSTART::

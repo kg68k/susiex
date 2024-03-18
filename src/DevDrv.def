@@ -1,0 +1,10 @@
+		.global	__GetPDriveNo
+		.global	__GetLDriveNo
+		.global	__AskDrive
+		.global	__RegistDrive
+		.global	__UnregistDrive
+		.global	__RegistDeviceDriver
+		.global	__RegistDeviceDriver2
+		.global	__UnregistDeviceDriver
+
+

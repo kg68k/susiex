@@ -1,0 +1,7707 @@
+*	SCSI Device Driver Body
+*	Copyright (C)1994-95 GORRY.
+*	$Id: sdd.ap,v 1.30 1997/09/10 01:48:15 GORRY Exp GORRY $
+
+
+		@APSTART;
+		@STRINGS;
+
+
+		.include	DOSCALL.MAC
+		.include	IOCSCALL.MAC
+
+		.include	GORRY\GORRY.MAC
+		.include	DevDrv.MAC
+		.include	sdd.MAC
+		.include	sddcall.MAC
+
+		.include	sddhed.def
+		.include	keep.def
+		.include	susie.def
+		.include	DevDrv.def
+
+
+*************************************************************************
+
+
+CANNOTWRITE = 0
+
+
+*************************************************************************
+
+
+		.text
+		dc.b	'$Id: sdd.ap,v 1.30 1997/09/10 01:48:15 GORRY Exp GORRY $',0
+		.even
+
+
+*************************************************************************
+
+
+DEVD_HOOK::
+		cmpi.l	#SDDCALL_GetSpecialOptionSDD,d0
+		beq	GetSpecialOptionSDD
+		cmpi.l	#SDDCALL_SetSpecialOptionSDD,d0
+		beq	SetSpecialOptionSDD
+		cmpi.l	#SDDCALL_SetForceProtectSDD,d0
+		beq	SetForceProtectSDD
+		cmpi.l	#SDDCALL_SetForceEjectSDD,d0
+		beq	SetForceEjectSDD
+		cmpi.l	#SDDCALL_AskSDDVersion,d0
+		beq	AskSDDVersion
+		cmpi.l	#SDDCALL_CalibrateSDD,d0
+		beq	CalibrateSDD
+		tst.l	d0 ; cmpi.l	#SDDCALL_AskSDD,d0
+		beq	AskSDD
+		cmpi.l	#SDDCALL_ReleaseSDD,d0
+		beq	ReleaseSDD
+		cmpi.l	#SDDCALL_AskReleaseSDD,d0
+		beq	AskReleaseSDD
+		rts
+
+
+*************************************************************************
+
+
+	@xproc	[ DEVD ] {
+	  ?_JpTable::
+		dc.l	?_Initialize	* $00 初期化
+		dc.l	?_ExchangeCheck	* $01 メディア交換チェック
+		dc.l	?_BuildBPB	* $02 BPB再構築
+		dc.l	?_IOCTRLIN	* $03 IOCTRLによる入力
+		dc.l	?_Read		* $04 読み込み
+		dc.l	?_DrvCtrl	* $05 ドライブコントロール＆センス
+		dc.l	?_Err		* $06 エラー
+		dc.l	?_Err		* $07 エラー
+		dc.l	?_Write		* $08 書き込み
+		dc.l	?_WriteV	* $09 ベリファイ付き書き込み
+		dc.l	?_Err		* $0A エラー
+		dc.l	?_Err		* $0B エラー
+		dc.l	?_Err		* $0C エラー
+		dc.l	?_Err		* $0D エラー
+		dc.l	?_Err		* $0E エラー
+		dc.l	?_Err		* $0F エラー
+		dc.l	?_Err		* $10 エラー
+		dc.l	?_Err		* $11 エラー
+		dc.l	?_Err		* $12 エラー
+		dc.l	?_SPIOCTRL	* $13 特殊IOCTRL
+		dc.l	?_Err		* $14 エラー
+		dc.l	?_Err		* $15 エラー
+		dc.l	?_Err		* $16 エラー
+		dc.l	?_Err		* $17 エラー
+
+	  ?_Err::
+		move.w	#$5003,d0
+		rts
+
+
+*************************************************************************
+
+
+*	long	?_Initialize( struct REQH * );
+*
+*		デバイスドライバコマンド$00	初期化
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_DevDrvEndPtr	デバイスドライバ終了アドレス
+*				REQH_ParamPtr		パラメータへのポインタ
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_Initialize ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			bsr	SCSI_S_SETFLAG
+			* 処理内容
+			move.w	#$5003,d0
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	?_ExchangeCheck( struct REQH * );
+*
+*		デバイスドライバコマンド$01	メディア交換チェック
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_MediaID		メディアバイト
+*				REQH_ExchangeFlag	メディア交換フラグ
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_ExchangeCheck ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			bsr	AskExchangeMedia_Time
+			moveq.l	#1,d0
+			tst.b	(ReqRemakeDPB)
+			@ifst	{
+				* HumanV2対策
+				cmpi.w	#$0300,(HumanVersion)
+				@ifcs	{
+					bsr	RemakeDPB
+				}
+				moveq.l	#-1,d0
+			}
+			move.b	d0,REQH_ExchangeFlag(a5)
+			moveq.l	#0,d0
+
+		  ?_e::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	?_BuildBPB( struct REQH * );
+*
+*		デバイスドライバコマンド$02	BPB再構築
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_MediaID		メディアバイト
+*				REQH_BPBPtrPtr		BPBテーブルへのポインタへのポインタ
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_BuildBPB ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			bsr	SCSI_S_SETFLAG
+			bsr	RemakeDPB
+			* 処理内容
+			move.w	#$5003,d0
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	?_Read( struct REQH * );
+*
+*		デバイスドライバコマンド$04	読み込み
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_MediaID		メディアバイト
+*				REQH_DataBufferPtr	データバッファへのポインタ
+*				REQH_SecNum		セクタ数
+*				REQH_Sec		開始セクタ番号
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_Read ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			bsr	ReadSec
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	?_DrvCtrl( struct REQH * );
+*
+*		デバイスドライバコマンド$05	ドライブコントロール
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_InnerCmd		内部コマンド
+*				REQH_DriveStatus	ドライブの状態を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_DrvCtrl ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			bsr	DrvCtrl
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	?_Write( struct REQH * );
+*
+*		デバイスドライバコマンド$08	書き込み
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_MediaID		メディアバイト
+*				REQH_DataBufferPtr	データバッファへのポインタ
+*				REQH_SecNum		セクタ数
+*				REQH_Sec		開始セクタ番号
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_Write ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			bsr	WriteSec
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	?_WriteV( struct REQH * );
+*
+*		デバイスドライバコマンド$09	ベリファイ付き書き込み
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_MediaID		メディアバイト
+*				REQH_DataBufferPtr	データバッファへのポインタ
+*				REQH_SecNum		セクタ数
+*				REQH_Sec		開始セクタ番号
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_WriteV ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			bsr	WriteVerifySec
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	?_SPIOCTRL( struct REQH * );
+*
+*		デバイスドライバコマンド$0D	特殊IOCTRL
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_DataBufferPtr	データバッファへのポインタ
+*				REQH_SPIOCTRLCmd	内部コマンド番号
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_SPIOCTRL ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			moveq.l	#0,d1
+			move.b	REQH_UnitNo(a5),d1
+			cmp.b	(DPBMaxCount),d1
+			bcc	?_Err_UnitNo
+
+			move.l	REQH_DataBufferPtr(a5),a1
+			move.w	REQH_SPIOCTRLCmd(a5),d0
+			@switch [ d0 ].w {
+			  @case	#$ffff:
+				move.l	#'SUSI',0(a1)
+				move.b	#'E',4(a1)
+				move.b	#SUSIEVERH,5(a1)
+				move.b	#SUSIEVERM*16+SUSIEVERL,6(a1)
+				move.b	#SUSIEVERR,7(a1)
+				moveq.l	#0,d0
+				@break;
+			  @case	#$0000:
+				tst.w	(FormatType)
+				bmi	?_Err_UnitNo
+				lea	DPBTable,a0
+				mulu	#SizeOf1DPBTable,d1
+				move.l	DPBTable_XDPBPtr(a0,d1.w),d0
+				beq	?_Err_UnitNo
+				move.l	d0,a3
+
+				moveq.l	#0,d0
+				move.b	XDPB_MediaID(a3),d0
+				move.w	d0,(a1)
+				moveq.l	#0,d0
+				@break;
+			  @case	#$0001:
+				bsr	SCSI_S_SETFLAG
+				bsr	RemakeDPB
+				moveq.l	#0,d0
+				tst.b	(SCSI_WriteProtectFlag)
+				@ifst	{
+					moveq.l	#1,d0
+				}
+				tst.b	(ReqRemakeDPB)
+				@ifst	{
+					moveq.l	#-1,d0
+				}
+				tst.w	(FormatType)
+				@ifmi	{
+					moveq.l	#-1,d0
+				}
+				move.l	d0,(a1)+
+
+				moveq.l	#0,d0
+				tst.w	(FormatType)
+				@break.mi;
+				lea	DPBTable,a0
+				mulu	#SizeOf1DPBTable,d1
+				move.l	DPBTable_XDPBPtr(a0,d1.w),d0
+				@break.eq;
+				move.l	d0,a3
+
+				move.w	XDPB_SecByte(a3),(a1)+
+				move.b	XDPB_CluSec(a3),d0
+				addq.b	#1,d0
+				move.b	d0,(a1)+
+				move.b	XDPB_FATNum(a3),(a1)+
+				move.w	XDPB_FATSec(a3),(a1)+
+				move.w	XDPB_RootEntryNum(a3),(a1)+
+				move.w	XDPB_CluNum(a4),d0
+				subq.w	#3,d0
+				move.b	XDPB_SftCluSec(a4),d1
+				andi.b	#$7f,d1
+				lsl.l	d1,d0
+				moveq.l	#0,d1
+				move.w	XDPB_DataSec(a4),d1
+				add.l	d1,d0
+				cmpi.l	#$10000,d0
+				@ifcc	{
+					moveq.l	#0,d0
+				}
+				move.w	d0,(a1)+
+				move.b	XDPB_MediaID(a3),(a1)+
+				move.b	XDPB_FATSize(a3),(a1)+
+				clr.w	(a1)+
+				clr.w	(a1)+
+				clr.b	(a1)+
+				clr.b	(a1)
+
+				bsr	SCSI_S_SETFLAG
+				moveq.l	#0,d0
+				@break;
+			  @case	#$0002:
+				move.l	a1,d0
+				@switch [ d0 ].l {
+				  @case	#-1:
+					bsr	SCSI_S_SETFLAG
+					bsr	RemakeDPB
+					bsr	SCSI_S_SETFLAG
+					moveq.l	#0,d0
+					@break;
+				  @case	#0:
+				  @case	#1:
+					moveq.l	#0,d0
+					@break;
+				  @default:
+					bra	?_Err_Cmd
+					@break;
+				}
+				@break;
+			  @case	#'SU':
+				move.l	REQH_DataBufferPtr(a5),a4
+				movem.l	(a4),d0-d3/a0-a3
+				bsr	DEVD_HOOK
+				move.l	REQH_DataBufferPtr(a5),a4
+				movem.l	d0-d3/a0-a3,(a4)
+				moveq.l	#0,d0
+				@break;
+			  @default:
+				bra	?_Err_Cmd
+			}
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		  ?_Err_UnitNo::
+			move.w	#$7002,d0	*ドライブの準備ができていない,ARI
+			bra	?_Quit
+
+		  ?_Err_Cmd::
+			move.w	#$5003,d0	*無効なコマンド,AI
+			bra	?_Quit
+
+		}
+
+
+*************************************************************************
+
+
+*	long	?_IOCTRLIN( struct REQH * );
+*
+*		デバイスドライバコマンド$03	IOCTRL-IN
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_DataBufferPtr	データバッファへのポインタ
+*				REQH_SPIOCTRLCmd	内部コマンド番号
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_IOCTRLIN ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			moveq.l	#0,d1
+			move.b	REQH_UnitNo(a5),d1
+			cmp.b	(DPBMaxCount),d1
+			bcc	?_Err_UnitNo
+
+			move.l	REQH_DataBufferPtr(a5),a1
+			move.l	REQH_SPIOCTRLCmd(a5),d0
+			@switch [ d0 ].w {
+			  @case	#$ffff:
+				move.l	#'SUSI',0(a1)
+				move.b	#'E',4(a1)
+				move.b	#SUSIEVERH,5(a1)
+				move.b	#SUSIEVERM*16+SUSIEVERL,6(a1)
+				move.b	#SUSIEVERR,7(a1)
+				moveq.l	#0,d0
+				@break;
+			  @case	#$0004:
+				move.l	(SCSI_ID),d0
+				andi.l	#$0007ffff,d0
+				move.l	d0,0(a1)
+				moveq.l	#0,d0
+				@break;
+			  @case	#$0008:
+				move.l	(SCSI_ID),d0
+				andi.l	#$0007ffff,d0
+				move.l	d0,0(a1)
+				clr.l	4(a1)
+				moveq.l	#0,d0
+				@break;
+			  @case	#'SU':
+				move.l	REQH_DataBufferPtr(a5),a4
+				movem.l	(a4),d0-d3/a0-a3
+				bsr	DEVD_HOOK
+				move.l	REQH_DataBufferPtr(a5),a4
+				movem.l	d0-d3/a0-a3,(a4)
+				moveq.l	#0,d0
+				@break;
+			  @default:
+				bra	?_Err_Cmd
+			}
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		  ?_Err_UnitNo::
+			move.w	#$7002,d0	*ドライブの準備ができていない,ARI
+			bra	?_Quit
+
+		  ?_Err_Cmd::
+			move.w	#$5003,d0	*無効なコマンド,AI
+			bra	?_Quit
+
+		}
+
+
+*************************************************************************
+
+
+	}
+
+
+*************************************************************************
+
+
+	@xproc	[ DEVD2 ] {
+	  ?_JpTable::
+		dc.l	?_Initialize	* $C0 初期化
+		dc.l	?_FindDir	* $C1 ディレクトリ検索
+		dc.l	?_Err		* $C2 エラー
+		dc.l	?_Err		* $C3 エラー
+		dc.l	?_Err		* $C4 エラー
+		dc.l	?_Err		* $C5 エラー
+		dc.l	?_FindFil	* $C6 ファイル検索
+		dc.l	?_Files		* $C7 ディレクトリリスト１番目取得
+		dc.l	?_NFiles	* $C8 ディレクトリリスト２番目以降取得
+		dc.l	?_Err		* $C9 エラー
+		dc.l	?_Open		* $CA ファイルオープン
+		dc.l	?_Close		* $CB ファイルクローズ
+		dc.l	?_Read		* $CC ファイルリード
+		dc.l	?_Err		* $CD おそらくファイルライト
+		dc.l	?_Seek		* $CE ファイルシーク
+		dc.l	?_CFCall	* $CF 不明
+		dc.l	?_GetCap	* $D0 容量取得
+		dc.l	?_DrvCtrl	* $D1 ドライブコントロール
+		dc.l	?_GetDPB	* $D2 DPB取得
+		dc.l	?_IORead	* $D3 メディア直接リード
+		dc.l	?_Err		* $D4 エラー
+		dc.l	?_IOCtrl	* $D5 ドライブ直接コントロール
+		dc.l	?_Abort		* $D6 アボート処理
+		dc.l	?_ExgCheck	* $D7 ディスク入れ換えチェック
+		dc.l	?_D8Call	* $D8 不明
+
+	  ?_Err::
+		move.w	#$700e,d0
+		rts
+
+
+*************************************************************************
+
+
+*	long	?_Initialize( struct REQH * );
+*
+*		デバイスドライバコマンド$C0	初期化
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_DevDrvEndPtr	デバイスドライバ終了アドレス
+*				REQH_ParamPtr		パラメータへのポインタ
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_Initialize ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			bsr	SCSI_S_SETFLAG
+			* 処理内容
+			move.w	#$5003,d0
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	?_FindDir( struct REQH * );
+*
+*		デバイスドライバコマンド$C1	ディレクトリ検索
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_OSFileNamePtr	OSファイル名へのポインタ
+*				REQH_Result		検索結果を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_FindDir ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			clr.l	(ReturnResult)
+			movea.l	REQH_OSFileNamePtr(a5),a3
+			addq.w	#2,a3
+			tst.b	1(a3)
+			beq	?_NoWork
+
+			bsr	FindDir
+			cmpi.w	#1,d0
+			@ifeq	{
+				moveq.l	#0,d0
+				bra	?_Quit
+			}
+			tst.w	d0
+			bne	?_Quit
+			move.l	(ReturnResult),REQH_Result(a5)
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		  ?_NoWork::
+			moveq.l	#0,d0
+			move.l	d0,REQH_Result(a5)
+			bra	?_Quit
+
+		}
+
+
+*************************************************************************
+
+
+*	long	?_FindFil( struct REQH * );
+*
+*		デバイスドライバコマンド$C6	ファイル検索
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_OSFileNamePtr	OSファイル名へのポインタ
+*				REQH_Result		検索結果を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_FindFil ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			clr.l	(ReturnResult)
+			bsr	FindDir
+			cmpi.w	#1,d0
+			@ifeq	{
+				moveq.l	#0,d0
+				bra	?_Quit
+			}
+			tst.w	d0
+			bne	?_Quit
+			tst.l	(ReturnResult)
+			bmi	?_Result
+			bsr	FindFil
+			cmpi.w	#1,d0
+			@ifeq	{
+				moveq.l	#0,d0
+				bra	?_Quit
+			}
+			tst.w	d0
+			bne	?_Quit
+		  ?_Result::
+			move.l	(ReturnResult),REQH_Result(a5)
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	?_Files( struct REQH * );
+*
+*		デバイスドライバコマンド$C7	ディレクトリリスト１番目を得る
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_FindAtr		検索属性
+*				REQH_OSFileNamePtr	OSファイル名へのポインタ
+*				REQH_DirListPtr		ディレクトリリストを返す
+*				REQH_Result		検索結果を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_Files ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			clr.l	(ReturnResult)
+			bsr	FindDir
+			cmpi.w	#1,d0
+			@ifeq	{
+				moveq.l	#0,d0
+				bra	?_Quit
+			}
+			tst.w	d0
+			bne	?_Quit
+			tst.l	(ReturnResult)
+			bmi	?_Result
+			bsr	StartFiles
+			cmpi.w	#1,d0
+			@ifeq	{
+				moveq.l	#0,d0
+				bra	?_Quit
+			}
+			tst.w	d0
+			bne	?_Quit
+		  ?_Result::
+			move.l	(ReturnResult),REQH_Result(a5)
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	?_NFiles( struct REQH * );
+*
+*		デバイスドライバコマンド$C8	ディレクトリリスト２番目以降を得る
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_DirListPtr		ディレクトリリストを返す
+*				REQH_Result		検索結果を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_NFiles ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			clr.l	(ReturnResult)
+			bsr	NextFiles
+			cmpi.w	#1,d0
+			@ifeq	{
+				moveq.l	#0,d0
+				bra	?_Quit
+			}
+			tst.w	d0
+			bne	?_Quit
+			move.l	(ReturnResult),REQH_Result(a5)
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	?_Open( struct REQH * );
+*
+*		デバイスドライバコマンド$CA	ファイルを開く
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_OSFileNamePtr	OSファイル名へのポインタ
+*				REQH_Result		検索結果を返す
+*				REQH_FileInfoPtr	ファイル情報へのポインタ
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_Open ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			clr.l	(ReturnResult)
+			bsr	FindDir
+			cmpi.w	#1,d0
+			@ifeq	{
+				moveq.l	#0,d0
+				bra	?_Quit
+			}
+			tst.w	d0
+			bne	?_Quit
+			tst.l	(ReturnResult)
+			bmi	?_Result
+			bsr	OpenFil
+			cmpi.w	#1,d0
+			@ifeq	{
+				moveq.l	#0,d0
+				bra	?_Quit
+			}
+			tst.w	d0
+			bne	?_Quit
+		  ?_Result::
+			move.l	(ReturnResult),REQH_Result(a5)
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	?_Close( struct REQH * );
+*
+*		デバイスドライバコマンド$CB	ファイルを閉じる
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_OSFileNamePtr	OSファイル名へのポインタ
+*				REQH_Result		検索結果を返す
+*				REQH_FileInfoPtr	ファイル情報へのポインタ
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_Close ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			clr.l	(ReturnResult)
+			bsr	CloseFil
+			tst.w	d0
+			bne	?_Quit
+			move.l	(ReturnResult),REQH_Result(a5)
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	?_Read( struct REQH * );
+*
+*		デバイスドライバコマンド$CC	ファイルを読む
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_AccessSize		アクセスサイズ
+*				REQH_Result		検索結果を返す
+*				REQH_FileInfoPtr	ファイル情報へのポインタ
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_Read ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			bsr	ReadFil
+			tst.w	d0
+			bne	?_Quit
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	?_Seek( struct REQH * );
+*
+*		デバイスドライバコマンド$CD	ファイルのシークを行なう
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_SeekMode		シークモード
+*				REQH_AccessSize		アクセスサイズ
+*				REQH_Result		検索結果を返す
+*				REQH_FileInfoPtr	ファイル情報へのポインタ
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_Seek ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			bsr	SeekFil
+			tst.w	d0
+			bne	?_Quit
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	?_CFCall( struct REQH * );
+*
+*		デバイスドライバコマンド$CF	不明
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_CFCall ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			move.l	REQH_AccessSize(a5),d0
+			@ifeq	{
+				move.l	REQH_FileInfoPtr(a5),a4
+				move.w	$3a(a4),$14(a5)
+				move.w	$3c(a4),$12(a5)
+				moveq.l	#0,d0
+			} @else {
+				moveq.l	#$f2,d0
+			}
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	?_GetCap( struct REQH * );
+*
+*		デバイスドライバコマンド$D0	容量取得
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_DataBufferPtr	容量データを返すバッファへのポインタ
+*				REQH_Result		結果を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_GetCap ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			clr.l	(ReturnResult)
+			bsr	GetCap
+			tst.w	d0
+			bne	?_Quit
+			move.l	(ReturnResult),REQH_Result(a5)
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	?_DrvCtrl( struct REQH * );
+*
+*		デバイスドライバコマンド$D1	ドライブコントロール
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_InnerCmd		内部コマンド
+*				REQH_DriveStatus	ドライブの状態を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_DrvCtrl ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			bsr	DrvCtrl
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	?_GetDPB( struct REQH * );
+*
+*		デバイスドライバコマンド$D2	DPB取得
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_DataBufferPtr	DPBを返すバッファへのポインタ
+*				REQH_Result		結果を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_GetDPB ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			move.l	REQH_DataBufferPtr(a5),a0
+			move.w	#$0800,$00(a0)
+			move.b	#$f5,$14(a0)
+			moveq.l	#$f2,d0
+			move.l	d0,REQH_Result(a5)
+			moveq.l	#0,d0
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	?_IORead( struct REQH * );
+*
+*		デバイスドライバコマンド$D3	ドライブから直接読む
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_MediaID		メディアバイト
+*				REQH_DataBufferPtr	データバッファへのポインタ
+*				REQH_SecNum		セクタ数
+*				REQH_Sec		開始セクタ番号
+*				REQH_Result		結果を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_IORead ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			bsr	ReadSec
+			moveq.l	#0,d0
+			move.l	d0,REQH_Result(a5)
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	?_IOCtrl( struct REQH * );
+*
+*		デバイスドライバコマンド$D5	ドライブ直接コントロール
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_DataBufferPtr	データバッファへのポインタ
+*				REQH_SPIOCTRLCmd	内部コマンド番号
+*				REQH_Result		結果を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_IOCtrl ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			move.l	REQH_DataBufferPtr(a5),a0
+			move.w	REQH_SPIOCTRLCmd(a5),d0
+			@switch [ d0 ].w {
+			  @case	#$ffff:
+				move.l	#'SUSI',0(a0)
+				move.b	#'E',4(a0)
+				move.b	#SUSIEVERH,5(a0)
+				move.b	#SUSIEVERM*16+SUSIEVERL,6(a0)
+				move.b	#SUSIEVERR,7(a0)
+				moveq.l	#0,d0
+				move.l	d0,REQH_Result(a5)
+				@break;
+
+			  @case	#$0000:
+				move.w	#$00f5,$00(a0)
+				moveq.l	#0,d0
+				move.l	d0,REQH_Result(a5)
+				@break;
+
+			  @case	#$8000:
+				clr.l	(ReturnResult)
+				bsr	ReadTOC
+				tst.w	d0
+				bne	?_Quit
+				move.l	(ReturnResult),REQH_Result(a5)
+				@break;
+
+			  @case	#$8001:
+				clr.l	(ReturnResult)
+				bsr	PlayAudio
+				tst.w	d0
+				bne	?_Quit
+				move.l	(ReturnResult),REQH_Result(a5)
+				@break;
+
+			  @case	#$8003:
+				clr.l	(ReturnResult)
+				bsr	StopAudio
+				tst.w	d0
+				bne	?_Quit
+				move.l	(ReturnResult),REQH_Result(a5)
+				@break;
+
+			  @case	#$8004:
+				clr.l	(ReturnResult)
+				bsr	ReadSubChannel
+				tst.w	d0
+				bne	?_Quit
+				move.l	(ReturnResult),REQH_Result(a5)
+				@break;
+
+			  @case	#$8005:
+				moveq.l	#$f2,d0
+				move.l	d0,REQH_Result(a5)
+				move.w	#0,d0
+				@break;
+
+			  @case	#$8006:
+				bsr	?_CheckSub
+				tst.l	d0
+				@ifeq	{
+					tst.b	(AudioCDExchangeFlag)
+					sne	d0
+					clr.b	(AudioCDExchangeFlag)
+				} @else {
+					st.b	(AudioCDExchangeFlag)
+					moveq.l	#0,d0
+				}
+				move.b	d0,(a0)
+				moveq.l	#0,d0
+				move.l	d0,REQH_Result(a5)
+				@break;
+
+			  @case	#$8007:
+				move.l	(SCSI_ID),d0
+				andi.l	#$0007ffff,d0
+				move.l	d0,(a0)
+				moveq.l	#0,d0
+				move.l	d0,REQH_Result(a5)
+				@break;
+
+			  @case	#$8008:
+				clr.l	(ReturnResult)
+				bsr	ReadTOC2
+				tst.w	d0
+				bne	?_Quit
+				move.l	(ReturnResult),REQH_Result(a5)
+				@break;
+
+			  @case	#$8009:
+				clr.l	(ReturnResult)
+				bsr	ReadTOC3
+				tst.w	d0
+				bne	?_Quit
+				move.l	(ReturnResult),REQH_Result(a5)
+				@break;
+
+			  @case	#$800A:
+				clr.l	(ReturnResult)
+				bsr	PauseResume
+				tst.w	d0
+				bne	?_Quit
+				move.l	(ReturnResult),REQH_Result(a5)
+				@break;
+
+			  @case	#'SU':
+				move.l	REQH_DataBufferPtr(a5),a4
+				movem.l	(a4),d0-d3/a0-a3
+				bsr	DEVD_HOOK
+				move.l	REQH_DataBufferPtr(a5),a4
+				movem.l	d0-d3/a0-a3,(a4)
+				moveq.l	#0,d0
+				move.l	d0,REQH_Result(a5)
+				@break;
+
+			  @default:
+				tst.w	d0
+				@ifmi	{
+					moveq.l	#$ff,d0
+				} @else {
+					moveq.l	#$f2,d0
+				}
+				move.l	d0,REQH_Result(a5)
+				moveq.l	#0,d0
+				@break;
+			}
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+
+		  ?_CheckSub::
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			bra	?_EnterTestUnit
+		  ?_RetryTestUnit::
+			bsr	WaitSec
+		  ?_EnterTestUnit::
+			move.l	(SCSI_ID),d4
+			andi.l	#$0007ffff,d4
+			SCSI	_S_TESTUNIT
+			tst.l	d0
+			@ifmi	{
+				st.b	(ReqAskSCSIConnect)
+				st.b	(RealEjectedFlag)
+				bra	?_Change
+			}
+			tst.l	d0
+			@ifne	{
+				@if [ cmpi.l #SCSI_BUSYCODE,d0 ].eq @or
+				    [ cmpi.l #SCSI_REQCODE,d0 ].eq {
+					move.l	d0,d7
+					bsr	SCSI_S_REQUEST
+					cmpi.w	#6,d0
+					@ifeq	{
+						bsr	SCSI_S_SETFLAG
+						bra	?_OKTestUnit
+					}
+					tst.b	(SCSI_WaitBusyFlag)
+					@ifst	{
+						tst.w	d0
+						beq	?_OKTestUnit
+						cmpi.w	#1,d0
+						beq	?_OKTestUnit
+					}
+					move.l	d7,d0
+				}
+				st.b	(RealEjectedFlag)
+				bra	?_Change
+			}
+		  ?_OKTestUnit::
+			moveq.l	#0,d0
+		  ?_CheckSub_e::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		  ?_Change::
+			bsr	SCSI_S_SETFLAG
+			moveq.l	#1,d0
+			bra	?_CheckSub_e
+
+		}
+
+
+*************************************************************************
+
+
+*	long	?_Abort( struct REQH * );
+*
+*		デバイスドライバコマンド$D6	アボート時処理
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_Result		結果を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_Abort ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			moveq.l	#$f2,d0
+			move.l	d0,REQH_Result(a5)
+			moveq.l	#0,d0
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		}
+
+
+*************************************************************************
+
+
+*	long	?_ExgCheck( struct REQH * );
+*
+*		デバイスドライバコマンド$D7	ディスク入れ換えチェック
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_Result		結果を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_ExgCheck ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			bsr	GetTime
+			move.l	(LastAccessTime),d2
+			move.l	(LastAccessDate),d3
+			sub.l	d3,d1
+			@ifne	{
+				add.l	#8640000,d0
+			}
+			sub.l	d2,d0
+			tst.b	(ReqRemakeDPB)
+			@ifst	{
+				cmp.l	(SpOption_TIN),d0
+			} @else {
+				cmp.l	(SpOption_TEJ),d0
+			}
+			bcs	?_NoCheck
+			bsr	GetTime
+			move.l	d0,(LastAccessTime)
+			move.l	d1,(LastAccessDate)
+
+			bsr	DEVD2_IOCtrl_CheckSub
+			tst.l	d0
+			@ifeq	{
+				tst.b	(CDROMExchangeFlag)
+				@ifne	{
+					tst.b	(ReqRemakeDPB)
+					@ifst	{
+						bsr	RemakeDPB
+					}
+					moveq.l	#$ff,d0
+				}
+				clr.b	(CDROMExchangeFlag)
+			} @else {
+				moveq.l	#0,d0
+				st.b	(CDROMExchangeFlag)
+			}
+			move.l	d0,REQH_Result(a5)
+			moveq.l	#0,d0
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		  ?_NoCheck::
+			moveq.l	#0,d0
+			move.l	d0,REQH_Result(a5)
+			bra	?_Quit
+
+		}
+
+
+*************************************************************************
+
+
+*	long	?_D8Call( struct REQH * );
+*
+*		デバイスドライバコマンド$D8	不明
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_Result		結果を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ ?_D8Call ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			moveq.l	#$f2,d0
+			move.l	d0,REQH_Result(a5)
+			moveq.l	#0,d0
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		}
+
+
+*************************************************************************
+
+
+	}
+
+
+*************************************************************************
+
+
+*	long	SCSI_S_SETFLAG( void );
+*
+*		SCSI初期化用のフラグを設定する。
+*		in	なし
+*		out	なし
+
+		@xproc	[ SCSI_S_SETFLAG ] {
+			st.b	(ReqRemakeDPB)
+			st.b	(ReqSendRezeroUnit)
+			st.b	(LastExchangeFlag)
+			move.b	#1,(AudioCDExchangeFlag)
+			move.b	#1,(CDROMExchangeFlag)
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	SCSI_S_REQUEST( void );
+*
+*		SCSIへリクエストコマンドを発行する。
+*		in	IOCS _S_REQUESTに必要なパラメータ
+*		out	d0	エラーコード
+
+		@xproc	[ SCSI_S_REQUEST ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d3/a1,-(sp)
+		  ?_Retry::
+			moveq.l	#$0e,d3
+			lea	SCSI_REQUESTBuf,a1
+			SCSI	_S_REQUEST
+			tst.l	d0
+			bne	?_Err
+			moveq.l	#0,d1
+			move.b	2(a1),d1
+			andi.w	#$000f,d1
+			add.w	d1,d1
+			move.w	?_Table(pc,d1.w),d0
+			bra	?_Quit
+
+		  ?_Err::
+			move.l	#$700c,d0
+
+		  ?_Quit::
+			movem.l	(sp)+,d3/a1
+			rts
+
+		  ?_Table::
+			dc.w	$0000	* 00 No Sense
+			dc.w	$0001	* 01 Recovered Error
+			dc.w	$7002	* 02 Not Ready
+			dc.w	$7007	* 03 Medium Error
+			dc.w	$700c	* 04 Hardware Error
+			dc.w	$7008	* 05 Illegal Request
+			dc.w	$0006	* 06 Unit Attention
+			dc.w	$700d	* 07 Data Protect
+			dc.w	$700c	* 08 Blank Check
+			dc.w	$700c	* 09 (Bender Unique)
+			dc.w	$700c	* 0A Copy Aborted
+			dc.w	$700c	* 0B Aborted Command
+			dc.w	$700c	* 0C Equal
+			dc.w	$700c	* 0D Volume Overflow
+			dc.w	$700c	* 0E Miscompare
+			dc.w	$700c	* 0F (Reserve)
+
+		}
+
+
+*************************************************************************
+
+
+*	long	SCSI_S_READ( void );
+*
+*		SCSIへリードコマンドを発行する。
+*		EXTが使用できるかどうかどうかを自動判定する。
+*		in	IOCS _S_READ(_S_READEXT)に必要なパラメータ
+*		out	d0	エラーコード
+
+		@xproc	[ SCSI_S_READ ] {
+			@return	[ d0, ErrCode ].l;
+
+			tst.b	(SCSI_WaitBusyFlag)
+			@ifcl	{
+				tst.b	(SCSI_RWEXTCmdFlag)
+				@ifst	{
+					SCSI	_S_READEXT
+				} @else {
+					SCSI	_S_READ
+				}
+				@if [ cmpi.l #SCSI_BUSYCODE,d0 ].eq @or
+				    [ cmpi.l #SCSI_REQCODE,d0 ].eq {
+					move.l	d0,-(sp)
+					bsr	SCSI_S_REQUEST
+					move.l	(sp)+,d0
+				}
+
+			} @else {
+				move.l	d7,-(sp)
+
+				bra	?_Enter
+			  ?_Retry::
+				bsr	WaitSec
+			  ?_Enter::
+				tst.b	(SCSI_RWEXTCmdFlag)
+				@ifst	{
+					SCSI	_S_READEXT
+				} @else {
+					SCSI	_S_READ
+				}
+				tst.l	d0
+				beq	?_Quit
+				cmpi.l	#SCSI_BUSYCODE,d0
+				beq	?_Request
+				cmpi.l	#SCSI_REQCODE,d0
+				bne	?_Quit
+			  ?_Request::
+				move.l	d0,d7
+				bsr	SCSI_S_REQUEST
+				tst.w	d0
+				beq	?_Retry
+				cmpi.w	#1,d0
+				beq	?_Retry
+				move.l	d7,d0
+
+			  ?_Quit::
+				move.l	(sp)+,d7
+
+			}
+
+			rts
+
+		}
+
+
+*************************************************************************
+
+
+*	long	SCSI_S_WRITE( void );
+*
+*		SCSIへライトコマンドを発行する。
+*		EXTが使用できるかどうかを自動判定する。
+*		in	IOCS _S_WRITE(_S_WRITEEXT)に必要なパラメータ
+*		out	d0	エラーコード
+
+		@xproc	[ SCSI_S_WRITE ] {
+			@return	[ d0, ErrCode ].l;
+
+			tst.b	(SCSI_WaitBusyFlag)
+			@ifcl	{
+				tst.b	(SCSI_RWEXTCmdFlag)
+				@ifst	{
+					SCSI	_S_WRITEEXT
+				} @else {
+					SCSI	_S_WRITE
+				}
+				@if [ cmpi.l #SCSI_BUSYCODE,d0 ].eq @or
+				    [ cmpi.l #SCSI_REQCODE,d0 ].eq {
+					move.l	d0,-(sp)
+					bsr	SCSI_S_REQUEST
+					move.l	(sp)+,d0
+				}
+
+			} @else {
+				move.l	d7,-(sp)
+
+				bra	?_Enter
+			  ?_Retry::
+				bsr	WaitSec
+			  ?_Enter::
+				tst.b	(SCSI_RWEXTCmdFlag)
+				@ifst	{
+					SCSI	_S_WRITEEXT
+				} @else {
+					SCSI	_S_WRITE
+				}
+				tst.l	d0
+				beq	?_Quit
+				cmpi.l	#SCSI_BUSYCODE,d0
+				beq	?_Request
+				cmpi.l	#SCSI_REQCODE,d0
+				bne	?_Quit
+			  ?_Request::
+				move.l	d0,d7
+				bsr	SCSI_S_REQUEST
+				tst.w	d0
+				beq	?_Retry
+				cmpi.w	#1,d0
+				beq	?_Retry
+				move.l	d7,d0
+
+			  ?_Quit::
+				move.l	(sp)+,d7
+			}
+
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	SCSI_S_WRITEVERIFY( void );
+*
+*		SCSIへライト＆ベリファイコマンドを発行する。
+*		in	IOCS _S_WRITEVERIFYEXT（注意：ありません）に必要なパラメータ
+*		out	d0	エラーコード
+
+		@xproc	[ SCSI_S_WRITEVERIFY ] {
+			@return	[ d0, ErrCode ].l;
+
+			tst.b	(SCSI_WaitBusyFlag)
+			@ifcl	{
+				bsr	?_Cmd
+				@if [ cmpi.l #SCSI_BUSYCODE,d0 ].eq @or
+				    [ cmpi.l #SCSI_REQCODE,d0 ].eq {
+					move.l	d0,-(sp)
+					bsr	SCSI_S_REQUEST
+					move.l	(sp)+,d0
+				}
+
+			} @else {
+				move.l	d7,-(sp)
+
+				bra	?_Enter
+			  ?_Retry::
+				bsr	WaitSec
+			  ?_Enter::
+				bsr	?_Cmd
+				tst.l	d0
+				beq	?_Quit
+				cmpi.l	#SCSI_BUSYCODE,d0
+				beq	?_Request
+				cmpi.l	#SCSI_REQCODE,d0
+				bne	?_Quit
+			  ?_Request::
+				move.l	d0,d7
+				bsr	SCSI_S_REQUEST
+				tst.w	d0
+				beq	?_Retry
+				cmpi.w	#1,d0
+				beq	?_Retry
+				move.l	d7,d0
+
+			  ?_Quit::
+				move.l	(sp)+,d7
+			}
+
+			rts
+
+		  ?_Cmd::
+			lea	?_Data(pc),a0
+			move.l	d2,2(a0)
+			move.w	d3,-(sp)
+			move.b	(sp)+,7(a0)
+			move.b	d3,8(a0)
+
+			pea	SCSI_DATABuf
+			clr.l	-(sp)
+			move.l	a1,-(sp)
+			moveq.l	#0,d0
+			move.w	d3,d0
+			lsl.l	d5,d0
+			lsl.l	#8,d0
+			move.l	d0,-(sp)
+			pea	?_Data(pc)
+			move.l	#10,-(sp)
+			bsr	SCSI_SELECT
+			lea	24(sp),sp
+			rts
+
+		  ?_Data::
+			dc.b	$2e,$00
+			dc.b	$00,$00,$00,$00
+			dc.b	$00
+			dc.b	$00,$00
+			dc.b	$00
+			.even
+
+		}
+
+
+*************************************************************************
+
+
+*	long	SCSI_S_VERIFY( void );
+*
+*		SCSIへベリファイコマンドを発行する。
+*		in	IOCS _S_VERIFYに必要なパラメータ
+*		out	d0	エラーコード
+
+		@xproc	[ SCSI_S_VERIFY ] {
+			@return	[ d0, ErrCode ].l;
+
+			tst.b	(SCSI_WaitBusyFlag)
+			@ifcl	{
+				SCSI	_S_VERIFY
+				@if [ cmpi.l #SCSI_BUSYCODE,d0 ].eq @or
+				    [ cmpi.l #SCSI_REQCODE,d0 ].eq {
+					move.l	d0,-(sp)
+					bsr	SCSI_S_REQUEST
+					move.l	(sp)+,d0
+				}
+
+			} @else {
+				move.l	d7,-(sp)
+
+				bra	?_Enter
+			  ?_Retry::
+				bsr	WaitSec
+			  ?_Enter::
+				SCSI	_S_VERIFY
+				tst.l	d0
+				beq	?_Quit
+				cmpi.l	#SCSI_BUSYCODE,d0
+				beq	?_Request
+				cmpi.l	#SCSI_REQCODE,d0
+				bne	?_Quit
+			  ?_Request::
+				move.l	d0,d7
+				bsr	SCSI_S_REQUEST
+				tst.w	d0
+				beq	?_Retry
+				cmpi.w	#1,d0
+				beq	?_Retry
+				move.l	d7,d0
+
+			  ?_Quit::
+				move.l	(sp)+,d7
+			}
+
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	SCSI_SELECT( void );
+*
+*		SCSIコマンド処理を行なう。
+*		in	0(sp)	出力コマンドバイト数
+*			4(sp)	出力コマンドへのポインタ
+*			8(sp)	出力データバイト数
+*			12(sp)	出力データへのポインタ
+*			16(sp)	入力データバイト数
+*			20(sp)	入力データへのポインタ
+*		out	d0	エラーコード
+
+		@xproc	[ SCSI_SELECT ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			clr.w	(?_RetryCount)
+		  ?_Retry::
+
+			lea	15*4(sp),a0
+			move.l	(SCSI_ID),d4
+			andi.l	#$0007ffff,d4
+
+			move.b	(SCSI_Version),d0
+			andi.b	#$07,d0
+			cmpi.b	#2,d0
+			@ifcc	{
+
+				* SCSI-2
+				move.l	(SCSI_ID),d0
+				swap	d0
+				cmpi.b	#8,d0
+				@ifcs	{
+				  ?_Select_SCSI2_LUN::
+					@repeat [ d3, #6-1 ].q {
+						SCSI	_S_SELECT2
+						tst.l	d0
+						beq	?_Select_e_SCSI2_LUN
+					}
+					bra	?_Err
+				  ?_Select_e_SCSI2_LUN::
+
+				  ?_MessageOut::
+					move.l	(SCSI_ID),d0
+					swap	d0
+					lea	?_MessageOutBuf(pc),a1
+					ori.b	#$80,d0
+					move.b	d0,(a1)
+					SCSI	_S_MSGOUT
+					tst.l	d0
+					bmi	?_Err
+				} @else {
+				  ?_Select_SCSI2::
+					@repeat [ d3, #6-1 ].q {
+						SCSI	_S_SELECT
+						tst.l	d0
+						beq	?_Select_e_SCSI2
+					}
+					bra	?_Err
+				  ?_Select_e_SCSI2::
+
+				}
+
+			  ?_CmdOut_SCSI2::
+				movem.l	0(a0),d3/a1
+				SCSI	_S_CMDOUT
+				tst.l	d0
+				bmi	?_Err
+
+			} @else {
+
+				* SCSI-1
+			  ?_Select_SCSI1::
+				@repeat [ d3, #6-1 ].q {
+					SCSI	_S_SELECT
+					tst.l	d0
+					beq	?_Select_e_SCSI1
+				}
+				bra	?_Err
+			  ?_Select_e_SCSI1::
+
+			  ?_CmdOut_SCSI1::
+				movem.l	0(a0),d3/a1
+				move.l	(SCSI_ID),d0
+				swap	d0
+				lsl.b	#5,d0
+				move.b	1(a1),d1
+				andi.b	#$1f,d1
+				or.b	d0,d1
+				move.b	d1,1(a1)
+
+				SCSI	_S_CMDOUT
+				tst.l	d0
+				bmi	?_Err
+
+			}
+
+		  ?_DataOut::
+			move.l	8(a0),d3
+			beq	?_DataIn
+			move.l	12(a0),a1
+			SCSI	_S_DATAOUT
+			move.l	d0,d6
+			cmpi.l	#-1,d0
+			beq	?_Err
+
+		  ?_DataIn::
+			move.l	16(a0),d3
+			beq	?_StatusIn
+			move.l	20(a0),a1
+			SCSI	_S_DATAIN
+			move.l	d0,d6
+			cmpi.l	#-1,d0
+			beq	?_Err
+
+		  ?_StatusIn::
+			lea	?_StatusInBuf(pc),a1
+			SCSI	_S_STSIN
+			cmpi.l	#-1,d0
+			beq	?_Err
+
+		  ?_MessageIn::
+			lea	?_MessageInBuf(pc),a1
+			SCSI	_S_MSGIN
+			cmpi.l	#-1,d0
+			beq	?_Err
+
+			tst.l	d6
+			bne	?_Err2
+
+			move.l	?_DataBuf(pc),d0
+			@ifne	{
+				@if [ cmpi.l #SCSI_BUSYCODE,d0 ].eq @or
+				    [ cmpi.l #SCSI_REQCODE,d0 ].eq {
+					move.l	d0,d7
+					bsr	SCSI_S_REQUEST
+					cmpi.w	#6,d0
+					@ifeq	{
+						bsr	SCSI_S_SETFLAG
+						bra	?_Quit
+					}
+					tst.b	(SCSI_WaitBusyFlag)
+					@ifst	{
+						tst.w	d0
+						beq	?_Quit
+						cmpi.w	#1,d0
+						beq	?_Quit
+					}
+					move.l	d7,d0
+				}
+				bsr	SCSI_S_SETFLAG
+				st.b	(RealEjectedFlag)
+			}
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		  ?_Err::
+			moveq.l	#-1,d0
+			bsr	SCSI_S_SETFLAG
+			st.b	(RealEjectedFlag)
+			bra	?_Quit
+
+		  ?_Err2::
+			addq.w	#1,(?_RetryCount)
+			cmpi.w	#6+1,(?_RetryCount)
+			bcs	?_Retry
+			move.l	d6,d0
+			@ifpl	{
+				move.l	?_DataBuf(pc),d0
+			}
+			bsr	SCSI_S_SETFLAG
+			st.b	(RealEjectedFlag)
+			bra	?_Quit
+
+		  ?_RetryCount::
+			dc.w	0
+		  ?_MessageOutBuf::
+			dc.b	0
+			dc.b	0
+		  ?_DataBuf::
+			dc.b	0
+		  ?_MessageInBuf::
+			dc.b	0
+			dc.b	0
+		  ?_StatusInBuf::
+			dc.b	0
+
+		}
+
+
+*************************************************************************
+
+
+GetPhysicalCDROM1Sector::
+		moveq.l	#1,d0
+		cmpi.l	#16,d2
+		@ifcs	{
+			rts
+		}
+		move.w	(CDROM_SectorSize),d0
+		@ifne	{
+			cmpi.w	#2048,d0
+			@ifls	{
+				move.l	#2048,d0
+				divu	(CDROM_SectorSize),d0
+			}
+		}
+		rts
+
+ConvertCDROMSector::
+		cmpi.l	#16,d2
+		@ifls	{
+			rts
+		}
+		move.w	(CDROM_SectorSize),d0
+		@ifne	{
+			cmpi.w	#2048,d0
+			@ifls	{
+				move.l	#2048,d0
+				divu	(CDROM_SectorSize),d0
+				@while [ lsr.w #1,d0 ].ne {
+					lsr.l	#1,d2
+				}
+			} @else {
+				* 正常動作しないはず
+				divu	#2048,d0
+				@while [ lsr.w #1,d0 ].ne {
+					lsl.l	#1,d2
+				}
+			}
+		}
+		rts
+
+ConvertCDROMCacheAddress::
+		cmpi.l	#16,d2
+		@ifcs	{
+			rts
+		}
+		movem.l	d0/d1,-(sp)
+		move.w	(CDROM_SectorSize),d0
+		@ifne	{
+			cmpi.w	#2048,d0
+			@ifls	{
+				move.l	#2048,d0
+				divu	(CDROM_SectorSize),d0
+				ext.l	d0
+				subq.l	#1,d0
+				move.l	d2,d1
+				and.l	d0,d1
+				mulu	(CDROM_SectorSize),d1
+				add.l	d1,a1
+			} @else {
+				* 正常動作しない
+			}
+		}
+		movem.l	(sp)+,d0/d1
+		rts
+
+
+*************************************************************************
+
+
+*	long	ReadCDROM( void );
+*
+*		CD-ROMリードルーチン。
+*		in	d2	セクタ番号
+*			d3	セクタ数
+*			a1	リードバッファへのポインタ
+*		out	d0	エラーコード
+
+
+		@xproc	[ ReadCDROM ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			move.l	(SCSI_ID),d4
+			andi.l	#$0007ffff,d4
+			moveq.l	#0,d5
+			move.b	(SCSI_BlockCapacity),d5
+			move.l	d3,d6
+		  ?_lp::
+			move.l	#76,d3	* CDROM１秒
+			cmp.l	d6,d3
+			@ifcc	{
+				move.l	d6,d3
+			}
+			clr.b	(RetryFlag)
+		  ?_Retrylp::
+			bsr	SCSI_S_READ
+			tst.l	d0
+			bmi	?_Err_Unconnect
+			bne	?_Retry
+
+		  ?_Next::
+			sub.l	d3,d6
+			@ifne	{
+				add.l	d3,d2
+				mulu	#$800,d3
+				add.l	d3,a1
+				bra	?_lp
+			}
+
+			bsr	GetTime
+			move.l	d0,(LastAccessTime)
+			move.l	d1,(LastAccessDate)
+			clr.b	(ReqAskSCSIConnect)
+			moveq.l	#0,d0
+			bra	?_Quit
+
+		  ?_Retry::
+			cmpi.b	#RETRYCOUNT,(RetryFlag)
+			bcc	?_Err_Read
+			addq.b	#1,(RetryFlag)
+			bsr	SCSI_S_SETFLAG
+			bra	?_Retrylp
+
+		  ?_Err_Media::
+			move.w	#$7007,d0	*無効なメディア,ARI
+			bra	?_Quit
+
+		  ?_Err_Unconnect::
+			move.w	#$7002,d0	*ドライブの準備ができていない,ARI
+			bra	?_Quit
+
+		  ?_Err_Read::
+			move.w	#$700b,d0	*読み込みエラー,ARI
+			lea	SCSI_REQUESTBuf,a1
+			move.b	2(a1),d1
+			andi.b	#$0f,d1
+			@switch [ d1 ].b {
+			  @case	#$02:	* $02 Not Ready
+				move.w	#$7002,d0	*ドライブの準備ができていない,ARI
+				@break;
+			}
+			bra	?_Quit
+
+		  ?_Err_UnitNo::
+			move.w	#$7002,d0	*ドライブの準備ができていない,ARI
+			bra	?_Quit
+
+		  ?_Quit::
+			tst.w	d0
+			@ifne	{
+				bsr	SCSI_S_SETFLAG
+			}
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		}
+
+
+*************************************************************************
+
+
+*	long	FlushCDROMCache( void );
+*
+*		CD-ROMキャッシュクリア。
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ FlushCDROMCache ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			moveq.l	#-1,d0
+			lea	CDROMSecNoTable,a0
+			move.w	(CDROMCacheBufSize),d7
+			subq.w	#1,d7
+			@repeat [ d7 ].w {
+				move.l	d0,(a0)+
+			}
+			moveq.l	#0,d0
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+
+		}
+
+
+*************************************************************************
+
+
+*	long	ReadCDROMCache( void );
+*
+*		キャッシュ付きCD-ROMリードルーチン。
+*		in	d1	0でデータ、1でディレクトリ階層
+*			d2	セクタ番号
+*		out	d0	エラーコード
+*			a1	リードデータへのポインタ
+
+
+		@xproc	[ ReadCDROMCache ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0/a2-a6,-(sp)
+			move.l	d2,-(sp)
+			bsr	ConvertCDROMSector
+
+		  ?_Entry::
+			moveq.l	#0,d7
+			@do {
+				move.w	d7,d0
+				mulu	#4,d0
+				lea	CDROMSecNoTable,a0
+				add.l	d0,a0
+				move.l	(a0),d0
+				@ifpl	{
+					cmp.l	d0,d2
+					beq	?_OkCache
+				}
+				addq.w	#1,d7
+				cmp.w	(CDROMCacheBufSize),d7
+			} @while.cs;
+
+			lea	CDROMSecNoTable,a0
+			moveq.l	#0,d7
+			tst.b	d1
+			@ifne	{
+				move.l	(CDROMCacheIndex),d7
+				addq.w	#1,d7
+				cmp.w	(CDROMCacheBufSize),d7
+				@ifcc	{
+					move.w	(CDROMCacheBufSize),d7
+					subq.w	#1,d7
+				}
+			}
+			move.w	d7,d0
+			mulu	#4,d0
+			add.l	d0,a0
+
+		  ?_NoCache::
+			move.l	#-1,(a0)
+			moveq.l	#1,d3
+			lea	CDROMCacheBuf,a1
+			move.w	d7,d0
+			mulu	#2048,d0
+			add.l	d0,a1
+			bsr	ReadCDROM
+			tst.l	d0
+			@ifeq	{
+				move.l	d2,(a0)
+				tst.b	d1
+				@ifne	{
+					move.l	d7,(CDROMCacheIndex)
+				}
+			}
+			bra	?_Quit
+
+		  ?_OkCache::
+			lea	CDROMCacheBuf,a1
+			moveq.l	#0,d0
+			move.w	d7,d0
+			move.l	d0,(CDROMCacheIndex)
+			mulu	#2048,d0
+			add.l	d0,a1
+			moveq.l	#0,d0
+
+		  ?_Quit::
+			move.l	(sp)+,d2
+			bsr	ConvertCDROMCacheAddress
+			movem.l	(sp)+,d1-d7/a0/a2-a6
+			rts
+
+		}
+
+
+*************************************************************************
+
+
+*	long	GetTime( void );
+*
+*		現在の起動後時間を得る。
+*		IOCS _ONTIMEコンパチ。
+*		in	なし
+*		out	d0	経過時間
+*			d1	経過日数
+
+		@xproc	[ GetTime ] {
+			@return	[ d0, Time ].l;
+			@return	[ d1, Date ].l;
+
+			move.w	sr,-(sp)
+			ori.w	#$700,sr
+			move.l	($09d6.w),d1
+			cmp.l	#$05A00000,D1
+			@ifcc	{
+				moveq.l	#0,d1
+			}
+			divu	#$05A0,D1
+			move.w	d1,-(sp)
+			swap	d1
+			mulu	#$1770,d1
+			moveq.l	#0,d0
+			move.w	($09ca.w),d0
+			sub.w	($09cc.w),d0
+			add.l	d1,d0
+			moveq.l	#0,d1
+			move.w	(sp)+,d1
+			move.w	(sp)+,sr
+
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	AskExchangeMedia( void );
+*
+*		メディア交換をチェックする。
+*		in	なし
+*		out	d0	0で交換なし
+
+
+		@xproc	[ AskExchangeMedia ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			st.b	(RealEjectedFlag)
+			tst.b	(ForceEjectFlag)
+			bst	?_Change
+			clr.b	(RealEjectedFlag)
+			clr.b	(ReqAskSCSIConnect)
+
+		  	bra	?_EnterTestUnit
+		  ?_RetryTestUnit::
+			bsr	WaitSec
+		  ?_EnterTestUnit::
+			move.l	(SCSI_ID),d4
+			andi.l	#$0007ffff,d4
+			SCSI	_S_TESTUNIT
+			tst.l	d0
+			@ifmi	{
+				st.b	(ReqAskSCSIConnect)
+				st.b	(RealEjectedFlag)
+				bra	?_Change
+			}
+			tst.l	d0
+			@ifne	{
+				@if [ cmpi.l #SCSI_BUSYCODE,d0 ].eq @or
+				    [ cmpi.l #SCSI_REQCODE,d0 ].eq {
+					move.l	d0,d7
+					bsr	SCSI_S_REQUEST
+					cmpi.w	#6,d0
+					@ifeq	{
+						bsr	SCSI_S_SETFLAG
+						bra	?_RetryTestUnit
+					}
+					tst.b	(SCSI_WaitBusyFlag)
+					@ifst	{
+						tst.w	d0
+						beq	?_OKTestUnit
+						cmpi.w	#1,d0
+						beq	?_OKTestUnit
+					}
+					move.l	d7,d0
+				}
+				st.b	(RealEjectedFlag)
+				bra	?_Change
+			}
+		  ?_OKTestUnit::
+
+		  	bra	?_EnterInquiry
+		  ?_RetryInquiry::
+			bsr	WaitSec
+		  ?_EnterInquiry::
+			lea	SCSI_INQUIRYBuf,a1
+			move.l	#$24,d3
+			SCSI	_S_INQUIRY
+			tst.l	d0
+			@ifne	{
+				@if [ cmpi.l #SCSI_BUSYCODE,d0 ].eq @or
+				    [ cmpi.l #SCSI_REQCODE,d0 ].eq {
+					move.l	d0,d7
+					bsr	SCSI_S_REQUEST
+					cmpi.w	#6,d0
+					@ifeq	{
+						bsr	SCSI_S_SETFLAG
+						bra	?_RetryTestUnit	* 再認識
+					}
+					tst.b	(SCSI_WaitBusyFlag)
+					@ifst	{
+						tst.w	d0
+						beq	?_OKInquiry
+						cmpi.w	#1,d0
+						beq	?_OKInquiry
+					}
+					move.l	d7,d0
+				}
+				clr.b	(SCSI_RemovableFlag)
+				st.b	(RealEjectedFlag)
+				bra	?_Change
+			}
+		  ?_OKInquiry::
+			move.b	2(a1),(SCSI_Version)
+			move.b	0(a1),d0
+			andi.b	#$1f,d0
+			move.b	d0,(SCSI_DeviceType)
+			tst.b	1(a1)
+			smi	(SCSI_RemovableFlag)
+
+		  	bra	?_EnterModeSense
+		  ?_RetryModeSense::
+			bsr	WaitSec
+		  ?_EnterModeSense::
+			lea	SCSI_MODESENSEBuf,a1
+			moveq.l	#$3f,d2
+			moveq.l	#32,d3
+			moveq.l	#0,d5
+			move.b	(SCSI_BlockCapacity),d5
+			SCSI	_S_MODESENSE
+			tst.l	d0
+			@ifne	{
+				@if [ cmpi.l #SCSI_BUSYCODE,d0 ].eq @or
+				    [ cmpi.l #SCSI_REQCODE,d0 ].eq {
+					move.l	d0,d7
+					bsr	SCSI_S_REQUEST
+					cmpi.w	#6,d0
+					@ifeq	{
+						bsr	SCSI_S_SETFLAG
+						bra	?_RetryTestUnit	* 再認識
+					}
+					tst.b	(SCSI_WaitBusyFlag)
+					@ifst	{
+						tst.w	d0
+						beq	?_OKModeSense
+						cmpi.w	#1,d0
+						beq	?_OKModeSense
+						move.l	d7,d0
+					}
+				}
+				clr.b	(SCSI_WriteProtectFlag)
+				st.b	(RealEjectedFlag)
+				bra	?_Change
+			}
+		  ?_OKModeSense::
+			tst.b	2(a1)
+			smi	(SCSI_WriteProtectFlag)
+
+			move.w	(SDDMode),d0
+			@switch [ d0 ].w {
+			  @case	#1:
+				st.b	(SCSI_WriteProtectFlag)
+				@break;
+			}
+
+			tst.b	(ForceProtectFlag)
+			@ifst	{
+				st.b	(SCSI_WriteProtectFlag)
+			}
+
+			tst.b	(ReqRemakeDPB)
+			bcl	?_Unchange
+
+		  ?_Change::
+			bsr	SCSI_S_SETFLAG
+			moveq.l	#-1,d0
+			bra	?_e
+
+		  ?_Unchange::
+			moveq.l	#1,d0
+			bra	?_e
+
+		  ?_e::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	AskExchangeMedia_Time( void );
+*
+*		メディア挿入時は(SpOption_TEJ)秒ごとに、
+*		メディア非挿入時は(SpOption_TIN)秒ごとに、
+*		メディア交換をチェックする。
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*		out	d0	エラーコード
+
+
+		@xproc	[ AskExchangeMedia_Time ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			bsr	GetTime
+			move.l	(LastAccessTime),d2
+			move.l	(LastAccessDate),d3
+			sub.l	d3,d1
+			@ifne	{
+				add.l	#8640000,d0
+			}
+			sub.l	d2,d0
+			tst.b	(ReqRemakeDPB)
+			@ifst	{
+				cmp.l	(SpOption_TIN),d0
+			} @else {
+				cmp.l	(SpOption_TEJ),d0
+			}
+			bcs	?_Unchange
+			bsr	AskExchangeMedia
+			move.l	d0,-(sp)
+			bsr	GetTime
+			move.l	d0,(LastAccessTime)
+			move.l	d1,(LastAccessDate)
+			move.l	(sp)+,d0
+			bra	?_e
+
+		  ?_Unchange::
+			moveq.l	#1,d0
+
+		  ?_e::
+			moveq.l	#0,d0
+
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	WaitSec( void );
+*
+*		(SpOption_TWA)秒待つ。
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ WaitSec ] {
+			movem.l	d0-d3,-(sp)
+
+			bsr	GetTime
+			move.l	d0,d2
+			move.l	d1,d3
+			@do {
+				bsr	GetTime
+				sub.l	d3,d1
+				@ifne	{
+					add.l	#8640000,d0
+				}
+				sub.l	d2,d0
+				cmp.l	(SpOption_TWA),d0
+			} @while.cs;
+
+			movem.l	(sp)+,d0-d3
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	ReadSec( void );
+*
+*		セクタを読み込む。
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_MediaID		メディアバイト
+*				REQH_DataBufferPtr	データバッファへのポインタ
+*				REQH_SecNum		セクタ数
+*				REQH_Sec		開始セクタ番号
+*		out	d0	エラーコード
+
+
+		@xproc	[ ReadSec ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			clr.b	(RetryFlag)
+		  ?_Retrylp::
+			tst.b	(ReqRemakeDPB)
+			@ifst	{
+				bsr	RemakeDPB
+				cmpi.w	#$0300,(HumanVersion)
+				@ifcc	{
+					st.b	(ReqRemakeDPB)
+					st.b	(ReqSendRezeroUnit)
+				}
+				tst.b	(ReqAskSCSIConnect)
+				bst	?_Err_Unconnect
+			}
+			moveq.l	#0,d1
+			move.b	REQH_UnitNo(a5),d1
+			cmp.b	(DPBMaxCount),d1
+			bcc	?_Err_UnitNo
+			tst.w	(FormatType)
+			bmi	?_Err_UnitNo
+			tst.b	(RealEjectedFlag)
+			bst	?_Err_Unconnect
+
+			move.w	(FormatType),d0
+			@switch [ d0 ].w {
+			  @case #SDD_FormatType_ISO9660:
+				moveq.l	#0,d6
+				moveq.l	#0,d7
+				@break;
+			  @default:
+				lea	DPBTable,a0
+				mulu	#SizeOf1DPBTable,d1
+				move.l	DPBTable_XDPBPtr(a0,d1.w),d0
+				beq	?_Err_UnitNo
+				move.l	d0,a3
+				move.l	DPBTable_BaseSec(a0,d1.w),d6
+				move.w	DPBTable_Sft(a0,d1.w),d7
+				@break;
+			}
+
+			move.l	REQH_Sec(a5),d2
+			move.l	REQH_SecNum(a5),d3
+			lsl.l	d7,d2
+			lsl.l	d7,d3
+			add.l	d6,d2
+			move.l	d3,d6
+
+			move.l	REQH_DataBufferPtr(a5),a1
+			move.l	(SCSI_ID),d4
+			andi.l	#$0007ffff,d4
+			moveq.l	#0,d5
+			move.b	(SCSI_BlockCapacity),d5
+		  ?_lp::
+			move.l	(DivideAccessSize),d3
+			cmp.l	d3,d6
+			@ifcs	{
+				move.l	d6,d3
+			}
+			bsr	SCSI_S_READ
+			tst.l	d0
+			bmi	?_Err_Unconnect
+			bne	?_Retry
+			sub.l	d3,d6
+			@ifne	{
+				move.w	(SCSI_BlockCapacityByte),d0
+				mulu	d3,d0
+				adda.l	d0,a1
+				add.l	d3,d2
+				bra	?_lp
+			}
+
+			bsr	GetTime
+			move.l	d0,(LastAccessTime)
+			move.l	d1,(LastAccessDate)
+			clr.b	(ReqAskSCSIConnect)
+			moveq.l	#0,d0
+			bra	?_Quit
+
+		  ?_Retry::
+			cmpi.b	#RETRYCOUNT,(RetryFlag)
+			bcc	?_Err_Read
+			addq.b	#1,(RetryFlag)
+			bsr	SCSI_S_SETFLAG
+			bra	?_Retrylp
+
+		  ?_Err_Media::
+			move.w	#$7007,d0	*無効なメディア,ARI
+			bra	?_Quit
+
+		  ?_Err_Unconnect::
+			move.w	#$7002,d0	*ドライブの準備ができていない,ARI
+			bra	?_Quit
+
+		  ?_Err_Read::
+			move.w	#$700b,d0	*読み込みエラー,ARI
+			lea	SCSI_REQUESTBuf,a1
+			move.b	2(a1),d1
+			andi.b	#$0f,d1
+			@switch [ d1 ].b {
+			  @case	#$02:	* $02 Not Ready
+				move.w	#$7002,d0	*ドライブの準備ができていない,ARI
+				@break;
+			}
+			bra	?_Quit
+
+		  ?_Err_UnitNo::
+			move.w	#$7002,d0	*ドライブの準備ができていない,ARI
+			bra	?_Quit
+
+		  ?_Quit::
+			tst.w	d0
+			@ifne	{
+				bsr	SCSI_S_SETFLAG
+			}
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	WriteSec( void );
+*
+*		セクタに書き込む。
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_MediaID		メディアバイト
+*				REQH_DataBufferPtr	データバッファへのポインタ
+*				REQH_SecNum		セクタ数
+*				REQH_Sec		開始セクタ番号
+*		out	d0	エラーコード
+
+
+		@xproc	[ WriteSec ] {
+			@return	[ d0, ErrCode ].l;
+
+ .if CANNOTWRITE
+
+	rts
+
+ .else
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			clr.b	(RetryFlag)
+		  ?_Retrylp::
+ .if 0	* 書き込み失敗時はRemakeDPBしてはならない
+			tst.b	(ReqRemakeDPB)
+			@ifst	{
+				bsr	RemakeDPB
+				cmpi.w	#$0300,(HumanVersion)
+				@ifcc	{
+					st.b	(ReqRemakeDPB)
+					st.b	(ReqSendRezeroUnit)
+				}
+				tst.b	(ReqAskSCSIConnect)
+				bst	?_Err_Unconnect
+			}
+ .endif
+			moveq.l	#0,d1
+			move.b	REQH_UnitNo(a5),d1
+			cmp.b	(DPBMaxCount),d1
+			bcc	?_Err_UnitNo
+			tst.w	(FormatType)
+			bmi	?_Err_UnitNo
+			tst.b	(SCSI_WriteProtectFlag)
+			bst	?_Err_Protect
+			tst.b	(RealEjectedFlag)
+			bst	?_Err_Unconnect
+
+			lea	DPBTable,a0
+			mulu	#SizeOf1DPBTable,d1
+			move.l	DPBTable_XDPBPtr(a0,d1.w),d0
+			beq	?_Err_UnitNo
+			move.l	d0,a3
+			move.l	DPBTable_BaseSec(a0,d1.w),d6
+			move.w	DPBTable_Sft(a0,d1.w),d7
+
+			move.l	REQH_Sec(a5),d2
+			move.l	REQH_SecNum(a5),d3
+			lsl.l	d7,d2
+			lsl.l	d7,d3
+			add.l	d6,d2
+			move.l	d3,d6
+
+			move.l	REQH_DataBufferPtr(a5),a1
+			move.l	(SCSI_ID),d4
+			andi.l	#$0007ffff,d4
+			moveq.l	#0,d5
+			move.b	(SCSI_BlockCapacity),d5
+		  ?_lp::
+			move.l	(DivideAccessSize),d3
+			cmp.l	d3,d6
+			@ifcs	{
+				move.l	d6,d3
+			}
+			bsr	SCSI_S_WRITE
+			tst.l	d0
+			bmi	?_Err_Unconnect
+			bne	?_Retry
+			sub.l	d3,d6
+			@ifne	{
+				move.w	(SCSI_BlockCapacityByte),d0
+				mulu	d3,d0
+				adda.l	d0,a1
+				add.l	d3,d2
+				bra	?_lp
+			}
+
+			bsr	GetTime
+			move.l	d0,(LastAccessTime)
+			move.l	d1,(LastAccessDate)
+			clr.b	(ReqAskSCSIConnect)
+			moveq.l	#0,d0
+			bra	?_Quit
+
+		  ?_Retry::
+			cmpi.b	#WRITERETRYCOUNT,(RetryFlag)
+			bcc	?_Err_Write
+			addq.b	#1,(RetryFlag)
+ .if 0	* 書き込み失敗時はRemakeDPBしてはならない
+			bsr	SCSI_S_SETFLAG
+ .endif
+			bra	?_Retrylp
+
+		  ?_Err_Media::
+			move.w	#$7007,d0	*無効なメディア,ARI
+			bra	?_Quit
+
+		  ?_Err_Protect::
+			bsr	DrvCtrl_Eject_Core
+			st.b	(ReqRemakeDPB)
+			st.b	(ReqSendRezeroUnit)
+			move.w	#$700d,d0	*ライトプロテクト,ARI
+			bra	?_Quit
+
+		  ?_Err_Unconnect::
+			move.w	#$7002,d0	*ドライブの準備ができていない,ARI
+			bra	?_Quit
+
+		  ?_Err_Write::
+			move.w	#$700a,d0	*書き込みエラー,ARI
+			lea	SCSI_REQUESTBuf,a1
+			move.b	2(a1),d1
+			andi.b	#$0f,d1
+			@switch [ d1 ].b {
+			  @case	#$02:	* $02 Not Ready
+				move.w	#$7002,d0	*ドライブの準備ができていない,ARI
+				@break;
+			  @case	#$07:	* $07 Data Protect
+				bsr	DrvCtrl_Eject_Core
+				move.w	#$700d,d0	*ライトプロテクト,ARI
+				@break;
+			}
+			bra	?_Quit
+
+		  ?_Err_UnitNo::
+			move.w	#$7002,d0	*ドライブの準備ができていない,ARI
+			bra	?_Quit
+
+		  ?_Quit::
+ .if 0	* 書き込み失敗時はRemakeDPBしてはならない
+			tst.w	d0
+			@ifne	{
+				bsr	SCSI_S_SETFLAG
+			}
+ .endif
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+ .endif
+
+		}
+
+
+*************************************************************************
+
+
+*	long	WriteVerifySec( void );
+*
+*		セクタに書き込み、ベリファイする。
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_MediaID		メディアバイト
+*				REQH_DataBufferPtr	データバッファへのポインタ
+*				REQH_SecNum		セクタ数
+*				REQH_Sec		開始セクタ番号
+*		out	d0	エラーコード
+
+
+		@xproc	[ WriteVerifySec ] {
+			@return	[ d0, ErrCode ].l;
+
+ .if CANNOTWRITE
+
+	rts
+
+ .else
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			cmpi.b	#3,(SCSI_VERIFYMode)
+			beq	WriteSec_Entry
+
+		  ?_Entry::
+			clr.b	(RetryFlag)
+		  ?_Retrylp::
+ .if 0	* 書き込み失敗時はRemakeDPBしてはならない
+			tst.b	(ReqRemakeDPB)
+			@ifst	{
+				bsr	RemakeDPB
+				cmpi.w	#$0300,(HumanVersion)
+				@ifcc	{
+					st.b	(ReqRemakeDPB)
+					st.b	(ReqSendRezeroUnit)
+				}
+				tst.b	(ReqAskSCSIConnect)
+				bst	?_Err_Unconnect
+			}
+ .endif
+			moveq.l	#0,d1
+			move.b	REQH_UnitNo(a5),d1
+			cmp.b	(DPBMaxCount),d1
+			bcc	?_Err_UnitNo
+			tst.w	(FormatType)
+			bmi	?_Err_UnitNo
+			tst.b	(SCSI_WriteProtectFlag)
+			bst	?_Err_Protect
+			tst.b	(RealEjectedFlag)
+			bst	?_Err_Unconnect
+
+			lea	DPBTable,a0
+			mulu	#SizeOf1DPBTable,d1
+			move.l	DPBTable_XDPBPtr(a0,d1.w),d0
+			beq	?_Err_UnitNo
+			move.l	d0,a3
+			move.l	DPBTable_BaseSec(a0,d1.w),d6
+			move.w	DPBTable_Sft(a0,d1.w),d7
+
+			move.l	REQH_Sec(a5),d2
+			move.l	REQH_SecNum(a5),d3
+			lsl.l	d7,d2
+			lsl.l	d7,d3
+			add.l	d6,d2
+			move.l	d3,d6
+
+			move.l	REQH_DataBufferPtr(a5),a1
+			move.l	(SCSI_ID),d4
+			andi.l	#$0007ffff,d4
+			moveq.l	#0,d5
+			move.b	(SCSI_BlockCapacity),d5
+			move.l	d6,d7
+			move.l	d2,a2
+			move.l	a1,a3
+
+			tst.b	(SCSI_VerifyCmdFlag)
+			@ifst	{
+				cmpi.b	#2,(SCSI_VERIFYMode)
+				beq	?_HardWriteVerify
+			}
+
+		  ?_Write::
+			move.l	d7,d6
+			move.l	a2,d2
+			move.l	a3,a1
+		  ?_Write_lp::
+			move.l	(DivideAccessSize),d3
+			cmp.l	d3,d6
+			@ifcs	{
+				move.l	d6,d3
+			}
+			bsr	SCSI_S_WRITE
+			tst.l	d0
+			bmi	?_Err_Unconnect
+			bne	?_Retry
+
+			sub.l	d3,d6
+			@ifne	{
+				move.w	(SCSI_BlockCapacityByte),d0
+				mulu	d3,d0
+				adda.l	d0,a1
+				add.l	d3,d2
+				bra	?_Write_lp
+			}
+
+			tst.b	(SCSI_VerifyCmdFlag)
+			bcl	?_SoftVerify
+
+		  ?_HardVerify::
+			move.l	d7,d6
+			move.l	a2,d2
+			move.l	a3,a1
+		  ?_HardVerify_lp::
+			move.l	(DivideAccessSize),d3
+			cmp.l	d3,d6
+			@ifcs	{
+				move.l	d6,d3
+			}
+			bsr	SCSI_S_VERIFY
+			tst.l	d0
+			bmi	?_Err_Unconnect
+			bne	?_RetryVerify_Hard
+
+			sub.l	d3,d6
+			@ifne	{
+				move.w	(SCSI_BlockCapacityByte),d0
+				mulu	d3,d0
+				adda.l	d0,a1
+				add.l	d3,d2
+				bra	?_HardVerify_lp
+			}
+			bra	?_OK
+
+		  ?_HardWriteVerify::
+			move.l	d7,d6
+			move.l	a2,d2
+			move.l	a3,a1
+		  ?_HardWriteVerify_lp::
+			move.l	(DivideAccessSize),d3
+			cmp.l	d3,d6
+			@ifcs	{
+				move.l	d6,d3
+			}
+			bsr	SCSI_S_WRITEVERIFY
+			tst.l	d0
+			bmi	?_Err_Unconnect
+			bne	?_RetryWriteVerify_Hard
+
+			sub.l	d3,d6
+			@ifne	{
+				move.w	(SCSI_BlockCapacityByte),d0
+				mulu	d3,d0
+				adda.l	d0,a1
+				add.l	d3,d2
+				bra	?_HardWriteVerify_lp
+			}
+			bra	?_OK
+
+		  ?_SoftVerify::
+			move.l	d7,d6
+			move.l	a2,d2
+			move.l	a3,a1
+		  ?_SoftVerify_lp::
+			move.l	(SoftVerifyBufSize),d3
+			divu	(SCSI_BlockCapacityByte),d3
+			andi.l	#$ffff,d3
+			cmp.l	d3,d6
+			@ifcs	{
+				move.l	d6,d3
+			}
+			move.l	a1,-(sp)
+			lea	SoftVerifyBuf,a1
+			bsr	SCSI_S_READ
+			move.l	(sp)+,a1
+			tst.l	d0
+			bmi	?_Err_Unconnect
+			bne	?_RetryVerify_Soft
+			movem.l	a1/a2,-(sp)
+			move.l	a1,a2
+			lea	SoftVerifyBuf,a1
+			move.w	(SCSI_BlockCapacityByte),d0
+			mulu	d3,d0
+			lsr.l	#3,d0
+			subq.w	#1,d0
+			@repeat [ d0 ].w {
+				cmpm.b	(a1)+,(a2)+
+				bne	?_SoftVerify_NG
+				cmpm.b	(a1)+,(a2)+
+				bne	?_SoftVerify_NG
+				cmpm.b	(a1)+,(a2)+
+				bne	?_SoftVerify_NG
+				cmpm.b	(a1)+,(a2)+
+				bne	?_SoftVerify_NG
+				cmpm.b	(a1)+,(a2)+
+				bne	?_SoftVerify_NG
+				cmpm.b	(a1)+,(a2)+
+				bne	?_SoftVerify_NG
+				cmpm.b	(a1)+,(a2)+
+				bne	?_SoftVerify_NG
+				cmpm.b	(a1)+,(a2)+
+				bne	?_SoftVerify_NG
+			}
+
+		  ?_SoftVerify_OK::
+			movem.l	(sp)+,a1/a2
+			bra	?_SoftVerify_Next
+
+		  ?_SoftVerify_NG::
+			movem.l	(sp)+,a1/a2
+			bra	?_RetryVerify_Soft
+
+		  ?_SoftVerify_Next::
+			sub.l	d3,d6
+			@ifne	{
+				move.w	(SCSI_BlockCapacityByte),d0
+				mulu	d3,d0
+				adda.l	d0,a1
+				add.l	d3,d2
+				bra	?_SoftVerify_lp
+			}
+			bra	?_OK
+
+		  ?_OK::
+			bsr	GetTime
+			move.l	d0,(LastAccessTime)
+			move.l	d1,(LastAccessDate)
+			clr.b	(ReqAskSCSIConnect)
+			moveq.l	#0,d0
+			bra	?_Quit
+
+		  ?_Retry::
+			cmpi.b	#WRITERETRYCOUNT,(RetryFlag)
+			bcc	?_Err_Write
+			addq.b	#1,(RetryFlag)
+ .if 0	* 書き込み失敗時はRemakeDPBしてはならない
+			bsr	SCSI_S_SETFLAG
+ .endif
+			bra	?_Retrylp
+
+		  ?_RetryVerify_Hard::
+			cmpi.b	#WRITERETRYCOUNT,(RetryFlag)
+			bcc	?_RetryVerify_Hard_2
+			addq.b	#1,(RetryFlag)
+			bra	?_HardVerify_lp
+		  ?_RetryVerify_Hard_2::
+			clr.b	(RetryFlag)
+			bra	?_SoftVerify
+
+		  ?_RetryWriteVerify_Hard::
+			cmpi.b	#WRITERETRYCOUNT,(RetryFlag)
+			bcc	?_RetryWriteVerify_Hard_2
+			addq.b	#1,(RetryFlag)
+			bra	?_HardWriteVerify_lp
+		  ?_RetryWriteVerify_Hard_2::
+			clr.b	(RetryFlag)
+			clr.b	(SCSI_VerifyCmdFlag)
+			bra	?_Write
+
+		  ?_RetryVerify_Soft::
+			cmpi.b	#WRITERETRYCOUNT,(RetryFlag)
+			bcc	?_Err_Verify
+			addq.b	#1,(RetryFlag)
+			bra	?_SoftVerify_lp
+
+		  ?_Err_Media::
+			move.w	#$7007,d0	*無効なメディア,ARI
+			bra	?_Quit
+
+		  ?_Err_Protect::
+			bsr	DrvCtrl_Eject_Core
+			st.b	(ReqRemakeDPB)
+			st.b	(ReqSendRezeroUnit)
+			move.w	#$700d,d0	*ライトプロテクト,ARI
+			bra	?_Quit
+
+		  ?_Err_Unconnect::
+			move.w	#$7002,d0	*ドライブの準備ができていない,ARI
+			bra	?_Quit
+
+		  ?_Err_Write::
+			move.w	#$700a,d0	*書き込みエラー,ARI
+			lea	SCSI_REQUESTBuf,a1
+			move.b	2(a1),d1
+			andi.b	#$0f,d1
+			@switch [ d1 ].b {
+			  @case	#$02:	* $02 Not Ready
+				move.w	#$7002,d0	*ドライブの準備ができていない,ARI
+				@break;
+			  @case	#$07:	* $07 Data Protect
+				bsr	DrvCtrl_Eject_Core
+				move.w	#$700d,d0	*ライトプロテクト,ARI
+				@break;
+			}
+			bra	?_Quit
+
+		  ?_Err_Verify::
+			move.w	#$7004,d0	*CRCエラー,ARI
+			lea	SCSI_REQUESTBuf,a1
+			move.b	2(a1),d1
+			andi.b	#$0f,d1
+			@switch [ d1 ].b {
+			  @case	#$02:	* $02 Not Ready
+				move.w	#$7002,d0	*ドライブの準備ができていない,ARI
+				@break;
+			  @case	#$07:	* $07 Data Protect
+				bsr	DrvCtrl_Eject_Core
+				move.w	#$700d,d0	*ライトプロテクト,ARI
+				@break;
+			}
+			bra	?_Quit
+
+		  ?_Err_UnitNo::
+			move.w	#$7002,d0	*ドライブの準備ができていない,ARI
+			bra	?_Quit
+
+		  ?_Quit::
+ .if 0	* 書き込み失敗時はRemakeDPBしてはならない
+			tst.w	d0
+			@ifne	{
+				bsr	SCSI_S_SETFLAG
+			}
+ .endif
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+ .endif
+
+		}
+
+
+*************************************************************************
+
+
+*	long	FindDir( void );
+*
+*		ディレクトリを検索する。特殊デバイスドライバ用。
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_OSFileNamePtr	OSファイル名へのポインタ
+*				REQH_Result		検索結果を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ FindDir ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			moveq.l	#-1,d0
+			move.l	d0,(LastFindDirIndexPtr)
+			move.l	d0,(LastFindFileIndexPtr)
+			lea	$9c+CDROMHeadSecReadBuf,a1
+			move.l	REQH_OSFileNamePtr(a5),a3
+			addq.w	#2,a3
+			cmpi.b	#$09,(a3)
+			bne	?_Err_OS
+			clr.l	(CDROMCacheIndex)
+ .if 1
+			tst.b	(ReqRemakeDPB)
+			@ifst	{
+				bsr	RemakeDPB
+			}
+ .endif
+			tst.b	(CDROMHeadSecReadBuf)
+			beq	?_Err_Media
+			moveq.l	#0,d3
+
+		  ?_FindNext::
+			cmpi.b	#$09,(a3)+
+			bne	?_Err_OS
+			add.l	d3,(CDROMCacheIndex)
+			moveq.l	#0,d2
+			move.b	EIS9_Adjust(a1),d2
+*			add.l	EIS9_SectorMotorola(a1),d2
+			subq.w	#4,sp
+			move.b	EIS9_SectorMotorola+0(a1),0(sp)
+			move.b	EIS9_SectorMotorola+1(a1),1(sp)
+			move.b	EIS9_SectorMotorola+2(a1),2(sp)
+			move.b	EIS9_SectorMotorola+3(a1),3(sp)
+			add.l	(sp)+,d2
+*			move.l	EIS9_SizeMotorola(a1),d3
+			subq.w	#4,sp
+			move.b	EIS9_SizeMotorola+0(a1),0(sp)
+			move.b	EIS9_SizeMotorola+1(a1),1(sp)
+			move.b	EIS9_SizeMotorola+2(a1),2(sp)
+			move.b	EIS9_SizeMotorola+3(a1),3(sp)
+			move.l	(sp)+,d3
+			addi.l	#$7ff,d3
+			moveq.l	#$0b,d0
+			lsr.l	d0,d3
+			subq.w	#1,d3
+			tst.b	(a3)
+			beq	?_Found
+
+		  ?_ReadNext::
+			moveq.l	#1,d1
+			bsr	ReadCDROMCache
+			tst.w	d0
+			bne	?_Quit
+
+		  ?_MatchNext::
+			btst.b	#1,EIS9_Atr(a1)
+			@ifst	{
+				bsr	?_MatchSub
+				tst.l	d0
+				beq	?_FindNext
+			}
+			moveq.l	#0,d0
+			move.b	EIS9_EntrySize(a1),d0
+			adda.w	d0,a1
+			tst.b	(a1)
+			bne	?_MatchNext
+			bsr	GetPhysicalCDROM1Sector
+			add.l	d0,d2
+			dbra	d3,?_ReadNext
+
+		  ?_NotFound::
+			moveq.l	#$fd,d0
+			move.l	d0,(ReturnResult)
+			moveq.l	#0,d0
+			bra	?_Quit
+		  ?_Err_OS::
+			moveq.l	#1,d0
+			bra	?_Quit
+
+		  ?_Err_Media::
+			move.w	#$7002,d0
+			bra	?_Quit
+
+		  ?_Found::
+			move.l	a1,(LastFindDirIndexPtr)
+			moveq.l	#0,d0
+			move.l	d0,(ReturnResult)
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		  ?_MatchSub::
+			movem.l	d1/d2/d6/d7/a1/a2,-(sp)
+
+			move.l	a3,d6
+			moveq.l	#0,d7
+			move.b	EIS9_NameSize(a1),d7
+			lea	EIS9_Name(a1),a2
+
+			@do {
+				subq.w	#1,d7
+				@break.cs;
+				move.b	(a2)+,d1
+				cmpi.b	#';',d1
+				@break.eq;
+				ToUpper	d1
+				move.b	(a3)+,d2
+				ToUpper	d2
+				cmp.b	d1,d2
+				bne	?_MatchSub_NG
+			} @while.t;
+			cmpi.b	#9,(a3)
+			beq	?_MatchSub_OK
+
+		  ?_MatchSub_NG::
+			moveq.l	#1,d0
+			move.l	d6,a3
+			bra	?_MatchSub_e
+
+		  ?_MatchSub_OK::
+			moveq.l	#0,d0
+
+		  ?_MatchSub_e::
+			movem.l	(sp)+,d1/d2/d6/d7/a1/a2
+			rts
+
+		}
+
+
+*************************************************************************
+
+
+*	long	FindFil( void );
+*
+*		ファイルを検索する。特殊デバイスドライバ用。
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_OSFileNamePtr	OSファイル名へのポインタ
+*				REQH_Result		検索結果を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ FindFil ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			move.l	(LastFindDirIndexPtr),d0
+			bmi	?_Err_OS
+			move.l	d0,a1
+			move.l	REQH_OSFileNamePtr(a5),a3
+			lea	$43(a3),a3
+
+		  ?_FindNext::
+			moveq.l	#0,d2
+			move.b	EIS9_Adjust(a1),d2
+*			add.l	EIS9_SectorMotorola(a1),d2
+			subq.w	#4,sp
+			move.b	EIS9_SectorMotorola+0(a1),0(sp)
+			move.b	EIS9_SectorMotorola+1(a1),1(sp)
+			move.b	EIS9_SectorMotorola+2(a1),2(sp)
+			move.b	EIS9_SectorMotorola+3(a1),3(sp)
+			add.l	(sp)+,d2
+*			move.l	EIS9_SizeMotorola(a1),d3
+			subq.w	#4,sp
+			move.b	EIS9_SizeMotorola+0(a1),0(sp)
+			move.b	EIS9_SizeMotorola+1(a1),1(sp)
+			move.b	EIS9_SizeMotorola+2(a1),2(sp)
+			move.b	EIS9_SizeMotorola+3(a1),3(sp)
+			move.l	(sp)+,d3
+			addi.l	#$7ff,d3
+			moveq.l	#$0b,d0
+			lsr.l	d0,d3
+			subq.w	#1,d3
+			move.w	(CDROMCacheBufSize),d1
+
+		  ?_ReadNext::
+			moveq.l	#1,d1
+			bsr	ReadCDROMCache
+			tst.w	d0
+			bne	?_Quit
+
+		  ?_MatchNext::
+			bsr	?_MatchSub
+			tst.l	d0
+			beq	?_Found
+			moveq.l	#0,d0
+			move.b	EIS9_EntrySize(a1),d0
+			adda.w	d0,a1
+			tst.b	(a1)
+			bne	?_MatchNext
+			bsr	GetPhysicalCDROM1Sector
+			add.l	d0,d2
+			dbra	d3,?_ReadNext
+
+		  ?_NotFound::
+			moveq.l	#$fe,d0
+			move.l	d0,(ReturnResult)
+			moveq.l	#0,d0
+			bra	?_Quit
+
+		  ?_Err_OS::
+			moveq.l	#1,d0
+			bra	?_Quit
+
+		  ?_Found::
+			moveq.l	#$10,d0
+			btst.b	#1,EIS9_Atr(a1)
+			@ifcl	{
+				moveq.l	#$20,d0
+			}
+			move.l	d0,(ReturnResult)
+			move.l	a1,(LastFindFileIndexPtr)
+			moveq.l	#0,d0
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		  ?_MatchSub::
+			movem.l	d1-d7/a1/a2,-(sp)
+
+			move.l	a3,d6
+			moveq.l	#0,d7
+			move.b	EIS9_NameSize(a1),d7
+			lea	EIS9_Name(a1),a2
+
+		  ?_MatchSub_0::
+			* ベース８文字の合致を調べる
+			moveq.l	#8,d5
+
+			btst.b	#2,EIS9_Atr(a1)
+			@ifst	{
+				tst.b	(BrowseResourceFlag)
+				bcl	?_MatchSub_NG
+				{
+					move.b	(a3)+,d1
+					cmpi.b	#'?',d1
+					beq	>
+					cmpi.b	#'#',d1
+					bne	?_MatchSub_NG
+				}
+				subq.b	#1,d5
+			}
+
+		  ?_MatchSub_1::
+			@do {
+				subq.w	#1,d7
+				@ifcs	{
+					addq.w	#1,d7
+					@break;
+				}
+				move.b	(a2)+,d1
+				cmpi.b	#';',d1
+				@ifeq	{
+					addq.w	#1,d7
+					subq.w	#1,a2
+					@break;
+				}
+				cmpi.b	#1,d1
+				@ifls	{
+					@ifeq	{
+						addq.w	#1,d7
+						subq.w	#1,a2
+					}
+					@break;
+				}
+				cmpi.b	#'.',d1
+				@ifeq	{
+					cmp.b	(a3),d1
+					@ifne	{
+						addq.w	#1,d7
+						subq.w	#1,a2
+						@break;
+					}
+				}
+				subq.b	#1,d5
+				@ifcs	{
+					addq.b	#1,d5
+					@break;
+				}
+				move.b	(a3)+,d2
+				cmpi.b	#'?',d2
+				@continue.eq;
+				ToUpper	d1
+				ToUpper	d2
+				cmp.b	d1,d2
+				bne	?_MatchSub_NG
+			} @while.t;
+
+			* CD側ベースが８文字未満ならその分のワイルドカード合致チェック
+		  ?_MatchSub_2::
+			tst.b	d5
+			@ifne	{
+				@do {
+					subq.b	#1,d5
+					@break.cs;
+					move.b	(a3)+,d0
+					cmpi.b	#' ',d0
+					@continue.eq;
+					cmpi.b	#'?',d0
+					@continue.eq;
+					cmpi.b	#'.',d0
+					@ifeq	{
+						cmpi.b	#'.',d1
+						@continue.eq;
+					}
+					bra	?_MatchSub_NG
+				} @while.t;
+			}
+
+			* CD側ポインタを最後の'.'までスキップさせる
+		  ?_MatchSub_3::
+			moveq.l	#0,d3
+			moveq.l	#0,d7
+			move.b	EIS9_NameSize(a1),d7
+			lea	EIS9_Name(a1),a2
+			@do {
+				subq.w	#1,d7
+				@ifcs	{
+					addq.w	#1,d7
+					tst.l	d3
+					@ifne	{
+						move.l	d3,a2
+						move.l	d4,d7
+					}
+					@break;
+				}
+				move.b	(a2)+,d1
+				cmpi.b	#1,d1
+				@ifls	{
+					@ifeq	{
+						addq.w	#1,d7
+						subq.w	#1,a2
+					}
+					@break;
+				}
+				cmpi.b	#';',d1
+				@ifeq	{
+					addq.w	#1,d7
+					subq.w	#1,a2
+					tst.l	d3
+					@ifne	{
+						move.l	d3,a2
+						move.l	d4,d7
+					}
+					@break;
+				}
+				cmpi.b	#'.',d1
+				@ifeq	{
+					move.l	a2,d3
+					move.l	d7,d4
+				}
+			} @while.t;
+
+			* 拡張子の合致チェック
+		  ?_MatchSub_4::
+			move.l	d6,a3
+			addq.w	#8,a3
+			moveq.l	#3,d5
+			@do {
+				subq.w	#1,d7
+				@ifcs	{
+					addq.w	#1,d7
+					@break;
+				}
+				move.b	(a2)+,d1
+				cmpi.b	#';',d1
+				@break.eq;
+				subq.b	#1,d5
+				@ifcs	{
+					addq.b	#1,d5
+					@break;
+				}
+				cmpi.b	#1,d1
+				@ifls	{
+					move.b	#'.',d1
+				}
+				move.b	(a3)+,d2
+				cmpi.b	#'?',d2
+				@continue.eq;
+				ToUpper	d1
+				ToUpper	d2
+				cmp.b	d1,d2
+				bne	?_MatchSub_NG
+			} @while.t;
+
+			* CD側ベースが３文字未満ならその分のワイルドカード合致チェック
+		  ?_MatchSub_5::
+			@do {
+				subq.b	#1,d5
+				@break.cs;
+				move.b	(a3)+,d0
+				cmpi.b	#$20,d0
+				@break.eq;
+				cmpi.b	#'?',d0
+				@continue.eq;
+				bra	?_MatchSub_NG
+			} @while.t;
+			bra	?_MatchSub_OK
+
+		  ?_MatchSub_NG::
+			moveq.l	#1,d0
+			move.l	d6,a3
+			bra	?_MatchSub_e
+
+		  ?_MatchSub_OK::
+			moveq.l	#0,d0
+
+		  ?_MatchSub_e::
+			movem.l	(sp)+,d1-d7/a1/a2
+			rts
+
+		}
+
+
+*************************************************************************
+
+
+*	long	StartFiles( void );
+*
+*		ディレクトリリスト取得を開始する。特殊デバイスドライバ用。
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_FindAtr		検索属性
+*				REQH_OSFileNamePtr	OSファイル名へのポインタ
+*				REQH_DirListPtr		ディレクトリリストを返す
+*				REQH_Result		検索結果を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ StartFiles ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			move.l	(LastFindDirIndexPtr),d0
+			bmi	?_Err_OS
+			move.l	d0,a1
+
+		  ?_FindNext::
+			move.l	REQH_DirListPtr(a5),a0
+			move.b	REQH_SearchAtr(a5),$00(a0)
+			moveq.l	#0,d2
+			move.b	EIS9_Adjust(a1),d2
+*			add.l	EIS9_SectorMotorola(a1),d2
+			subq.w	#4,sp
+			move.b	EIS9_SectorMotorola+0(a1),0(sp)
+			move.b	EIS9_SectorMotorola+1(a1),1(sp)
+			move.b	EIS9_SectorMotorola+2(a1),2(sp)
+			move.b	EIS9_SectorMotorola+3(a1),3(sp)
+			add.l	(sp)+,d2
+*			move.l	EIS9_SizeMotorola(a1),d3
+			subq.w	#4,sp
+			move.b	EIS9_SizeMotorola+0(a1),0(sp)
+			move.b	EIS9_SizeMotorola+1(a1),1(sp)
+			move.b	EIS9_SizeMotorola+2(a1),2(sp)
+			move.b	EIS9_SizeMotorola+3(a1),3(sp)
+			move.l	(sp)+,d3
+			addi.l	#$7ff,d3
+			moveq.l	#0,d4
+			moveq.l	#$0b,d0
+			lsr.l	d0,d3
+			subq.w	#1,d3
+			move.l	d2,$02(a0)
+			move.w	d3,$06(a0)
+			clr.w	$08(a0)
+
+			move.l	REQH_OSFileNamePtr(a5),a3
+			tst.b	3(a3)
+			@ifeq	{
+				btst.b	#3,(a0)
+				bst	?_MatchSub_Volume
+			}
+
+		  ?_Entry2::
+
+		  ?_ReadNext::
+			tst.w	d3
+			bmi	?_NotFound
+			moveq.l	#1,d1
+			bsr	ReadCDROMCache
+			tst.w	d0
+			bne	?_Quit
+			add.l	d4,a1
+
+		  ?_MatchNext::
+			lea	$0a(a0),a3
+			bsr	?_MatchSub
+			tst.l	d0
+			beq	?_Found
+			moveq.l	#0,d0
+			move.b	EIS9_EntrySize(a1),d0
+			adda.w	d0,a1
+			add.w	d0,d4
+			cmpi.w	#$800-SizeOfEIS9+1,d4
+			@ifcs	{
+				tst.b	(a1)
+				bne	?_MatchNext
+			}
+			moveq.l	#0,d4
+			bsr	GetPhysicalCDROM1Sector
+			add.l	d0,d2
+			dbra	d3,?_ReadNext
+
+		  ?_NotFound::
+			moveq.l	#$fe,d0
+			move.l	d0,(ReturnResult)
+			moveq.l	#0,d0
+			bra	?_Quit
+
+		  ?_Err_OS::
+			moveq.l	#1,d0
+			bra	?_Quit
+
+		  ?_Found::
+			moveq.l	#0,d0
+			move.b	EIS9_EntrySize(a1),d0
+			adda.w	d0,a1
+			add.w	d0,d4
+			@if [ cmpi.w #$800-SizeOfEIS9+1,d4 ].cc @or
+			    [ tst.b (a1) ].eq {
+				moveq.l	#0,d4
+				bsr	GetPhysicalCDROM1Sector
+				add.l	d0,d2
+				subq.w	#1,d3
+			}
+			move.l	d2,$02(a0)
+			move.w	d3,$06(a0)
+			move.w	d4,$08(a0)
+		  ?_Found_::
+			moveq.l	#0,d0
+			move.l	d0,(ReturnResult)
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		  ?_MatchSub::
+			moveq.l	#0,d1
+			move.b	$00(a0),d0
+			btst	#5,d0
+			@ifst	{
+				btst.b	#1,EIS9_Atr(a1)
+				@ifcl	{
+					bset	#5,d1
+				}
+			}
+			btst	#4,d0
+			@ifst	{
+				btst.b	#1,EIS9_Atr(a1)
+				@ifst	{
+					bset	#4,d1
+				}
+			}
+			tst.b	d1
+			beq	?_MatchSub_Quit
+			bsr	FindFil_MatchSub
+			tst.l	d0
+			@ifeq	{
+				bsr	?_MakeFileInfo
+			}
+		  ?_MatchSub_Quit::
+			rts
+
+		  ?_MatchSub_Volume::
+			lea	$0a(a0),a3
+			lea	VolumeEIS9,a1
+			bsr	FindFil_MatchSub
+			moveq.l	#$08,d1
+			tst.l	d0
+			bne	?_Entry2
+			bsr	?_MakeFileInfo
+			move.l	d2,$02(a0)
+			move.w	d3,$06(a0)
+			move.w	d4,$08(a0)
+			bra	?_Found_
+
+		  ?_MakeFileInfo::
+			movem.l	d0-d7/a0-a6,-(sp)
+			move.b	d1,$15(a0)
+			move.b	EIS9_Year(a1),d0
+			subi.b	#80,d0
+			lsl.w	#4,d0
+			or.b	EIS9_Month(a1),d0
+			lsl.w	#5,d0
+			or.b	EIS9_Day(a1),d0
+			move.w	d0,$18(a0)
+			move.b	EIS9_Hour(a1),d0
+			lsl.w	#6,d0
+			or.b	EIS9_Min(a1),d0
+			lsl.l	#6,d0
+			or.b	EIS9_Sec(a1),d0
+			lsr.l	#1,d0
+			move.w	d0,$16(a0)
+*			move.l	EIS9_SizeMotorola(a1),d0
+			subq.w	#4,sp
+			move.b	EIS9_SizeMotorola+0(a1),0(sp)
+			move.b	EIS9_SizeMotorola+1(a1),1(sp)
+			move.b	EIS9_SizeMotorola+2(a1),2(sp)
+			move.b	EIS9_SizeMotorola+3(a1),3(sp)
+			move.l	(sp)+,d0
+			btst.b	#1,EIS9_Atr(a1)
+			@ifst	{
+				moveq.l	#0,d0
+			}
+			move.l	d0,$1a(a0)
+			lea	$1e(a0),a0
+			moveq.l	#0,d6
+			move.b	EIS9_NameSize(a1),d6
+			lea	EIS9_Name(a1),a2
+			move.b	(a2),d0
+			@switch [ d0 ].b {
+			  @case	#1:
+				move.b	#'.',(a0)+
+			  @case	#0:
+				move.b	#'.',(a0)+
+				@break;
+			  @default:
+				* ベースをコピー
+				moveq.l	#0,d2
+				moveq.l	#0,d5
+				move.l	d6,d7
+				cmpi.b	#18,d7
+				@ifcc	{
+					moveq.l	#18,d7
+				}
+				* リソースのチェック
+				tst.b	(BrowseResourceFlag)
+				@ifst	{
+					btst.b	#2,EIS9_Atr(a1)
+					@ifst	{
+						move.b	#'#',(a0)+
+						subq.w	#1,d7
+					}
+				}
+				subq.w	#1,d7
+				@repeat [ d7 ].w {
+					move.b	(a2)+,d0
+					subq.b	#1,d6
+					cmpi.b	#';',d0
+					@break.eq;
+					cmpi.b	#'.',d0
+					@ifeq	{
+						move.l	a0,d2
+						move.l	a2,d5
+					}
+					cmpi.b	#' '+1,d0
+					@ifcs	{
+						move.b	#'_',d0
+					}
+					move.b	d0,(a0)+
+				}
+				tst.b	d6
+				@break.eq;
+				cmpi.b	#';',d0
+				@break.eq;
+				* ポインタを最後の'.'までスキップ
+				moveq.l	#0,d3
+				moveq.l	#0,d6
+				move.b	EIS9_NameSize(a1),d6
+				lea	EIS9_Name(a1),a2
+				@do {
+					move.b	(a2)+,d0
+					subq.w	#1,d6
+					cmpi.b	#';',d0
+					@break.eq;
+					cmpi.b	#'.',d0
+					@ifeq	{
+						move.l	a2,d3
+						move.l	d6,d4
+					}
+					tst.b	d6
+				} @while.ne;
+				tst.l	d3
+				@break.eq;
+				* 拡張子をコピー
+				move.l	d3,a2
+				move.l	d4,d6
+				cmp.l	a2,d5
+				@ifeq	{
+					tst.l	d2
+					@ifne	{
+						move.l	d2,a0
+					}
+				}
+				move.b	#'.',(a0)+
+				move.l	d6,d7
+				cmpi.b	#3,d7
+				@ifcc	{
+					moveq.l	#3,d7
+				}
+				subq.w	#1,d7
+				@repeat [ d7 ].w {
+					move.b	(a2)+,d0
+					subq.b	#1,d6
+					cmpi.b	#';',d0
+					@break.eq;
+					cmpi.b	#'.',d0
+					@break.eq;
+					cmpi.b	#' '+1,d0
+					@ifcs	{
+						move.b	#'_',d0
+					}
+					move.b	d0,(a0)+
+				}
+
+				@break;
+			}
+			clr.b	(a0)
+			movem.l	(sp)+,d0-d7/a0-a6
+			rts
+
+		}
+
+
+*************************************************************************
+
+
+*	long	NextFiles( void );
+*
+*		ディレクトリリストを取得する。特殊デバイスドライバ用。
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_FindAtr		検索属性
+*				REQH_OSFileNamePtr	OSファイル名へのポインタ
+*				REQH_DirListPtr		ディレクトリリストを返す
+*				REQH_Result		検索結果を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ NextFiles ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			move.l	(LastFindDirIndexPtr),d0
+			bmi	StartFiles_Err_OS
+			move.l	d0,a1
+
+		  ?_FindNext::
+			move.l	REQH_DirListPtr(a5),a0
+			move.l	$02(a0),d2
+			move.w	$06(a0),d3
+			moveq.l	#0,d4
+			move.w	$08(a0),d4
+			bra	StartFiles_Entry2
+
+		}
+
+
+*************************************************************************
+
+
+*	long	OpenFil( void );
+*
+*		ファイルを開く。特殊デバイスドライバ用。
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_OSFileNamePtr	OSファイル名へのポインタ
+*				REQH_Result		検索結果を返す
+*				REQH_FileInfoPtr	ファイル情報へのポインタ
+*		out	d0	エラーコード
+
+
+		@xproc	[ OpenFil ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			move.l	(LastFindDirIndexPtr),d0
+			bmi	?_Err_OS
+			move.l	d0,a1
+			move.l	REQH_FileInfoPtr(a5),a3
+			lea	$24(a3),a3
+
+		  ?_FindNext::
+			moveq.l	#0,d2
+			move.b	EIS9_Adjust(a1),d2
+*			add.l	EIS9_SectorMotorola(a1),d2
+			subq.w	#4,sp
+			move.b	EIS9_SectorMotorola+0(a1),0(sp)
+			move.b	EIS9_SectorMotorola+1(a1),1(sp)
+			move.b	EIS9_SectorMotorola+2(a1),2(sp)
+			move.b	EIS9_SectorMotorola+3(a1),3(sp)
+			add.l	(sp)+,d2
+*			move.l	EIS9_SizeMotorola(a1),d3
+			subq.w	#4,sp
+			move.b	EIS9_SizeMotorola+0(a1),0(sp)
+			move.b	EIS9_SizeMotorola+1(a1),1(sp)
+			move.b	EIS9_SizeMotorola+2(a1),2(sp)
+			move.b	EIS9_SizeMotorola+3(a1),3(sp)
+			move.l	(sp)+,d3
+			addi.l	#$7ff,d3
+			moveq.l	#$0b,d0
+			lsr.l	d0,d3
+			subq.w	#1,d3
+			move.w	(CDROMCacheBufSize),d1
+
+		  ?_ReadNext::
+			moveq.l	#1,d1
+			bsr	ReadCDROMCache
+			tst.w	d0
+			bne	?_Quit
+
+		  ?_MatchNext::
+			bsr	FindFil_MatchSub
+			tst.l	d0
+			beq	?_Found
+			moveq.l	#0,d0
+			move.b	EIS9_EntrySize(a1),d0
+			adda.w	d0,a1
+			tst.b	(a1)
+			bne	?_MatchNext
+			bsr	GetPhysicalCDROM1Sector
+			add.l	d0,d2
+			dbra	d3,?_ReadNext
+
+		  ?_NotFound::
+			moveq.l	#$fe,d0
+			move.l	d0,(ReturnResult)
+			moveq.l	#0,d0
+			bra	?_Quit
+
+		  ?_Err_OS::
+			moveq.l	#1,d0
+			bra	?_Quit
+
+		  ?_Err_OpenDir::
+			moveq.l	#$fb,d0
+			move.l	d0,(ReturnResult)
+			moveq.l	#0,d0
+			bra	?_Quit
+
+		  ?_Found::
+			moveq.l	#0,d0
+			btst.b	#1,EIS9_Atr(a1)
+			bst	?_Err_OpenDir
+			move.l	d0,(ReturnResult)
+			move.l	a1,(LastFindFileIndexPtr)
+			bsr	?_MakeFileInfo
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		  ?_MakeFileInfo::
+			movem.l	d0-d7/a0-a6,-(sp)
+			move.l	REQH_FileInfoPtr(a5),a0
+			clr.l	$06(a0)
+			moveq.l	#0,d2
+			move.b	EIS9_Adjust(a1),d2
+*			add.l	EIS9_SectorMotorola(a1),d2
+			subq.w	#4,sp
+			move.b	EIS9_SectorMotorola+0(a1),0(sp)
+			move.b	EIS9_SectorMotorola+1(a1),1(sp)
+			move.b	EIS9_SectorMotorola+2(a1),2(sp)
+			move.b	EIS9_SectorMotorola+3(a1),3(sp)
+			add.l	(sp)+,d2
+			move.l	d2,$14(a0)
+			move.l	d2,$1c(a0)
+			clr.l	$20(a0)
+			move.b	EIS9_Year(a1),d0
+			subi.b	#80,d0
+			lsl.w	#4,d0
+			or.b	EIS9_Month(a1),d0
+			lsl.w	#5,d0
+			or.b	EIS9_Day(a1),d0
+			move.w	d0,$3c(a0)
+			move.b	EIS9_Hour(a1),d0
+			lsl.w	#6,d0
+			or.b	EIS9_Min(a1),d0
+			lsl.l	#6,d0
+			or.b	EIS9_Sec(a1),d0
+			lsr.l	#1,d0
+			move.w	d0,$3a(a0)
+*			move.l	EIS9_SizeMotorola(a1),$40(a0)
+			move.b	EIS9_SizeMotorola+0(a1),$40+0(a0)
+			move.b	EIS9_SizeMotorola+1(a1),$40+1(a0)
+			move.b	EIS9_SizeMotorola+2(a1),$40+2(a0)
+			move.b	EIS9_SizeMotorola+3(a1),$40+3(a0)
+
+			movem.l	(sp)+,d0-d7/a0-a6
+			rts
+
+		}
+
+
+*************************************************************************
+
+
+*	long	CloseFil( void );
+*
+*		ファイルを閉じる。特殊デバイスドライバ用。
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_OSFileNamePtr	OSファイル名へのポインタ
+*				REQH_Result		検索結果を返す
+*				REQH_FileInfoPtr	ファイル情報へのポインタ
+*		out	d0	エラーコード
+
+
+		@xproc	[ CloseFil ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			moveq.l	#0,d0
+			move.l	d0,(ReturnResult)
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+
+		}
+
+
+*************************************************************************
+
+
+*	long	ReadFil( void );
+*
+*		ファイルを読む。特殊デバイスドライバ用。
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_DataBufferPtr	読み込みバッファへのポインタ
+*				REQH_AccessSize		アクセスサイズ
+*				REQH_Result		検索結果を返す
+*				REQH_FileInfoPtr	ファイル情報へのポインタ
+*		out	d0	エラーコード
+
+
+		@xproc	[ ReadFil ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			move.l	REQH_DataBufferPtr(a5),a3
+			move.l	REQH_FileInfoPtr(a5),a0
+			move.l	REQH_AccessSize(a5),d6
+			move.l	$06(a0),d2
+			add.l	d6,d2
+			cmp.l	$40(a0),d2
+			@ifcc	{
+				move.l	$40(a0),d6
+				sub.l	$06(a0),d6
+				move.l	d6,REQH_AccessSize(a5)
+			}
+			tst.l	d6
+			bmi	?_Err_ReadSize
+			beq	?_Err_0Read
+
+		  ?_ReadHead::
+			move.l	$1c(a0),d4
+			moveq.l	#0,d5
+			move.w	(CDROM_SectorSize),d0
+			@ifne	{
+				cmpi.w	#2048,d0
+				@ifcs	{
+					move.l	#2048,d0
+					divu	(CDROM_SectorSize),d0
+					ext.l	d0
+					subq.l	#1,d0
+					move.l	d4,d1
+					and.l	d0,d1
+					sub.l	d1,d4
+					mulu	(CDROM_SectorSize),d1
+					move.l	d1,d5
+				}
+			}
+
+
+			move.l	$06(a0),d2
+			add.l	d5,d2
+			moveq.l	#0,d0
+			move.w	(CDROM_SectorSize),d0
+			move.l	a0,-(sp)
+			move.l	d0,-(sp)
+			move.l	d2,-(sp)
+			bsr	___udivsi3
+			addq.w	#8,sp
+			move.l	(sp)+,a0
+			move.l	d0,d2
+			add.l	d4,d2
+			move.l	#2048,d0
+			divu	(CDROM_SectorSize),d0
+			ext.l	d0
+			subq.l	#1,d0
+			not.l	d0
+			and.l	d0,d2
+
+			move.l	$06(a0),d3
+			add.l	d5,d3
+			andi.l	#$800-1,d3
+			beq	?_ReadBody
+
+			moveq.l	#0,d1
+			bsr	ReadCDROMCache
+			tst.w	d0
+			bne	?_Err_Read
+			add.l	d3,a1
+			eori.w	#$800-1,d3
+			addq.w	#1,d3
+			cmp.l	d6,d3
+			@ifcc	{
+				move.l	d6,d3
+			}
+			sub.l	d3,d6
+			subq.w	#1,d3
+			@repeat [ d3 ].w {
+				move.b	(a1)+,(a3)+
+			}
+			move.l	#2048,d0
+			divu	(CDROM_SectorSize),d0
+			ext.l	d0
+			add.l	d0,d2
+
+		  ?_ReadBody::
+			move.l	d6,d3
+			moveq.l	#$0b,d0
+			lsr.l	d0,d3
+			tst.l	d3
+			beq	?_ReadTail
+			move.l	a3,a1
+			move.l	d2,-(sp)
+			bsr	ConvertCDROMSector
+			bsr	ReadCDROM
+			move.l	(sp)+,d2
+			tst.w	d0
+			bne	?_Err_Read
+			moveq.l	#$0b,d0
+			lsl.l	d0,d3
+			sub.l	d3,d6
+			add.l	d3,a3
+			move.w	(CDROM_SectorSize),d0
+			movem.l	d2/a0-a2,-(sp)
+			move.l	d0,-(sp)
+			move.l	d3,-(sp)
+			bsr	___udivsi3
+			addq.w	#8,sp
+			movem.l	(sp)+,d2/a0-a2
+			add.l	d0,d2
+
+		  ?_ReadTail::
+			move.l	d6,d3
+			andi.l	#$800-1,d3
+			beq	?_ReadOk
+			moveq.l	#0,d1
+			bsr	ReadCDROMCache
+			tst.w	d0
+			bne	?_Err_Read
+			subq.w	#1,d3
+			@repeat [ d3 ].w {
+				move.b	(a1)+,(a3)+
+			}
+
+		  ?_ReadOk::
+			move.l	REQH_AccessSize(a5),d0
+			add.l	d0,$06(a0)
+		  ?_Err_0Read::
+		  ?_Result::
+			moveq.l	#0,d0
+
+		  ?_Err_Read:
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		  ?_Err_ReadSize::
+			moveq.l	#0,d0
+			bra	?_Result
+
+		}
+
+
+*************************************************************************
+
+
+*	long	SeekFil( void );
+*
+*		ファイルのシークを行なう。特殊デバイスドライバ用。
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_SeekMode		シークモード
+*				REQH_AccessSize		アクセスサイズ
+*				REQH_Result		検索結果を返す
+*				REQH_FileInfoPtr	ファイル情報へのポインタ
+*		out	d0	エラーコード
+
+
+		@xproc	[ SeekFil ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			move.l	REQH_DataBufferPtr(a5),a3
+			move.l	REQH_FileInfoPtr(a5),a0
+			move.l	REQH_AccessSize(a5),d6
+			move.b	REQH_SeekMode(a5),d0
+			beq	?_SEEK_SET
+			cmpi.b	#1,d0
+			beq	?_SEEK_CUR
+			bra	?_SEEK_END
+
+		  ?_SEEK_CUR::
+			add.l	$06(a0),d6
+
+		  ?_SEEK_SET::
+			cmp.l	$40(a0),d6
+			bhi	?_Err_Offset
+			move.l	d6,$06(a0)
+			move.l	d6,d0
+			bra	?_Result
+
+		  ?_SEEK_END::
+			move.l	$40(a0),d0
+			sub.l	d6,d0
+			bcs	?_Err_Offset
+			move.l	d0,$06(a0)
+			bra	?_Result
+
+		  ?_Err_Offset::
+			moveq.l	#$e7,d0
+
+		  ?_Result::
+			move.l	d0,REQH_AccessSize(a5)
+			moveq.l	#0,d0
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+
+		}
+
+
+*************************************************************************
+
+
+*	long	GetCap( void );
+*
+*		容量を取得する。特殊デバイスドライバ用。
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_DataBufferPtr	容量データを返すバッファへのポインタ
+*				REQH_Result		結果を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ GetCap ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			move.w	#$7002,d0
+			lea	CDROMHeadSecReadBuf,a0
+			move.l	REQH_DataBufferPtr(a5),a1
+			cmpi.b	#1,(a0)
+			@ifeq	{
+				move.l	$54(a0),d1
+				lsr.l	#3,d1
+				move.l	d1,$00(a1)
+				move.l	#$0008_0800,$04(a1)
+				moveq.l	#0,d0
+				move.l	d0,REQH_Result(a5)
+			}
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+
+		}
+
+
+*************************************************************************
+
+
+*	long	ReadTOC( void );
+*
+*		TOCを読む。
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_DataBufferPtr	データバッファへのポインタ
+*				REQH_SPIOCTRLCmd	内部コマンド番号
+*				REQH_Result		結果を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ ReadTOC ] {
+			@return	[ d0, ErrCode ].l;
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			move.l	REQH_DataBufferPtr(a5),a1
+			lea	SCSI_DATABuf,a0
+
+		  ?_Head::
+			moveq.l	#$aa,d0
+			moveq.l	#2,d1
+			bsr	?_ReadTOCSub
+			tst.w	d0
+			bne	?_Err_Read
+
+			move.b	2(a0),d6
+			move.b	d6,(a1)+
+			move.b	3(a0),d7
+			move.b	d7,(a1)+
+			move.l	8(a0),d0
+			lsl.l	#8,d0
+			beq	?_Err_Read
+			move.l	d0,(a1)+
+
+		  ?_Body::
+			@do {
+				move.b	d6,d0
+				moveq.l	#2,d1
+				bsr	?_ReadTOCSub
+				tst.w	d0
+				bne	?_Err_Read
+				move.l	8(a0),d0
+				lsl.l	#8,d0
+				beq	?_Err_Read
+				move.b	5(a0),d0
+				lsr.b	#2,d0
+				andi.b	#1,d0
+				move.l	d0,(a1)+
+				addq.b	#1,d6
+				cmp.b	d7,d6
+			} @while.ls;
+
+			moveq.l	#0,d0
+			move.l	d0,(ReturnResult)
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		  ?_Err_Read::
+			moveq.l	#$f2,d0
+			move.l	d0,(ReturnResult)
+			moveq.l	#0,d0
+			bra	?_Quit
+
+		  ?_ReadTOCSub::
+			move.b	d0,(?_Data2)
+			move.b	d1,(?_Data+1)
+			pea	SCSI_DATABuf
+			move.l	#12,-(sp)
+			clr.l	-(sp)
+			clr.l	-(sp)
+			pea	?_Data(pc)
+			move.l	#10,-(sp)
+			bsr	SCSI_SELECT
+			lea	24(sp),sp
+			rts
+		  ?_Data::
+			dc.b	$43,$02,$00,$00,$00,$00
+		  ?_Data2::
+			dc.b	$aa,$00,$0c,$00
+
+		}
+
+
+*************************************************************************
+
+
+*	long	ReadTOC2( void );
+*
+*		TOCを読む。
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_DataBufferPtr	データバッファへのポインタ
+*				REQH_SPIOCTRLCmd	内部コマンド番号
+*				REQH_Result		結果を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ ReadTOC2 ] {
+			@return	[ d0, ErrCode ].l;
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			move.l	REQH_DataBufferPtr(a5),a1
+			lea	SCSI_DATABuf,a0
+
+		  ?_Head::
+			moveq.l	#$aa,d0
+			moveq.l	#2,d1
+			bsr	ReadTOC_ReadTOCSub
+			tst.w	d0
+			bne	ReadTOC_Err_Read
+
+			move.w	2(a0),(a1)
+
+			moveq.l	#0,d0
+			move.l	d0,(ReturnResult)
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		}
+
+
+*************************************************************************
+
+
+*	long	ReadTOC3( void );
+*
+*		TOCを読む。
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_DataBufferPtr	データバッファへのポインタ
+*				REQH_SPIOCTRLCmd	内部コマンド番号
+*				REQH_Result		結果を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ ReadTOC3 ] {
+			@return	[ d0, ErrCode ].l;
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			move.l	REQH_DataBufferPtr(a5),a1
+			lea	SCSI_DATABuf,a0
+
+		  ?_Head::
+			moveq.l	#$aa,d0
+			moveq.l	#2,d1
+			bsr	ReadTOC_ReadTOCSub
+			tst.w	d0
+			bne	ReadTOC_Err_Read
+
+			move.b	2(a0),d6
+			move.b	3(a0),d7
+			move.l	8(a0),d0
+			lsl.l	#8,d0
+			beq	ReadTOC_Err_Read
+			move.l	d0,(a1)+
+
+			bra	ReadTOC_Body
+
+		}
+
+
+*************************************************************************
+
+
+*	long	FindDataTOC( void );
+*
+*		TOCからデータトラックを探す。
+*		in	なし
+*		out	d0	CD-ROMデータアドレス
+*				負でエラーコード
+
+
+		@xproc	[ FindDataTOC ] {
+			@return	[ d0, ErrCode ].l;
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			lea	SCSI_DATABuf,a0
+			clr.l	(FindDataTOC_DataAddress)
+			clr.b	(FindDataTOC_TrackNo)
+			clr.b	(FindDataTOC_StartTrackNo)
+			clr.b	(FindDataTOC_EndTrackNo)
+
+		  ?_Head::
+			moveq.l	#$aa,d0
+			moveq.l	#0,d1
+			bsr	ReadTOC_ReadTOCSub
+			tst.w	d0
+			bne	?_Err_Read
+
+			move.b	2(a0),d6
+			move.b	3(a0),d7
+			move.l	8(a0),d0
+			move.b	d6,(FindDataTOC_TrackNo)
+			move.b	d6,(FindDataTOC_StartTrackNo)
+			move.b	d7,(FindDataTOC_EndTrackNo)
+
+		  ?_Body::
+			@while [ cmp.b d7,d6 ].ls {
+				move.b	d6,d0
+				moveq.l	#0,d1
+				bsr	ReadTOC_ReadTOCSub
+				tst.w	d0
+				bne	?_Err_Read
+				move.l	8(a0),d1
+				move.b	5(a0),d0
+				lsr.b	#2,d0
+				andi.b	#1,d0
+				bst	?_Found
+				addq.b	#1,d6
+			}
+
+		  ?_NotFound::
+			moveq.l	#$ff,d0
+			bra	?_Quit
+
+		  ?_Err_Read::
+			moveq.l	#$f2,d0
+			bra	?_Quit
+
+		  ?_Found::
+			move.l	d1,d0
+			move.l	d0,(FindDataTOC_DataAddress)
+			addq.b	#1,d6
+
+		  ?_Quit::
+			move.b	d6,(FindDataTOC_TrackNo)
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		}
+
+*	long	FindDataTOCNext( void );
+*
+*		TOCから次のデータトラックを探す。
+*		in	なし
+*		out	d0	CD-ROMデータアドレス
+*				負でエラーコード
+
+
+		@xproc	[ FindDataTOCNext ] {
+			@return	[ d0, ErrCode ].l;
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			lea	SCSI_DATABuf,a0
+
+		  ?_Head::
+			move.b	(FindDataTOC_TrackNo),d6
+			move.b	(FindDataTOC_EndTrackNo),d7
+			bra	FindDataTOC_Body
+
+		}
+
+
+*************************************************************************
+
+
+*	long	PlayAudio( void );
+*
+*		オーディオ再生を行なう。
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_DataBufferPtr	データバッファへのポインタ
+*				REQH_SPIOCTRLCmd	内部コマンド番号
+*				REQH_Result		結果を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ PlayAudio ] {
+			tst.b	(ReqSendPlayAudioAdrFlag)
+			bcl	PlayAudioMSF
+			bra	PlayAudioAdr
+		}
+
+
+*************************************************************************
+
+
+*	long	PlayAudioMSF( void );
+*
+*		オーディオ再生を行なう。
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_DataBufferPtr	データバッファへのポインタ
+*				REQH_SPIOCTRLCmd	内部コマンド番号
+*				REQH_Result		結果を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ PlayAudioMSF ] {
+			@return	[ d0, ErrCode ].l;
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			move.l	REQH_DataBufferPtr(a5),a1
+			lea	?_Data2(pc),a0
+			move.b	(a1)+,(a0)+
+			move.b	(a1)+,(a0)+
+			move.b	(a1)+,(a0)+
+			addq.w	#1,a1
+			move.b	(a1)+,(a0)+
+			move.b	(a1)+,(a0)+
+			move.b	(a1)+,(a0)+
+
+			pea	SCSI_DATABuf
+			clr.l	-(sp)
+			clr.l	-(sp)
+			clr.l	-(sp)
+			pea	?_Data(pc)
+			move.l	#10,-(sp)
+			bsr	SCSI_SELECT
+			lea	24(sp),sp
+			tst.w	d0
+			bne	?_Err_Read
+			moveq.l	#0,d0
+			move.l	d0,(ReturnResult)
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		  ?_Err_Read::
+			moveq.l	#$f2,d0
+			move.l	d0,(ReturnResult)
+			moveq.l	#0,d0
+			bra	?_Quit
+
+		  ?_Data::
+			dc.b	$47,$00,$00
+		  ?_Data2::
+			dc.b	$00,$00,$00,$00,$00,$00,$00
+
+		}
+
+
+*************************************************************************
+
+
+*	long	PlayAudioAdr( void );
+*
+*		オーディオ再生を行なう。
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_DataBufferPtr	データバッファへのポインタ
+*				REQH_SPIOCTRLCmd	内部コマンド番号
+*				REQH_Result		結果を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ PlayAudioAdr ] {
+			@return	[ d0, ErrCode ].l;
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			move.l	REQH_DataBufferPtr(a5),a1
+			lea	?_Data2(pc),a0
+			moveq.l	#0,d0
+			moveq.l	#0,d1
+			moveq.l	#0,d2
+			move.b	(a1)+,d1
+			mulu	#60,d1
+			move.b	(a1)+,d0
+			add.l	d0,d1
+			subq.l	#2,d1
+			mulu	#75,d1
+			move.b	(a1)+,d0
+			add.l	d0,d1
+			rol.l	#8,d1
+			move.b	d1,(a0)+
+			rol.l	#8,d1
+			move.b	d1,(a0)+
+			rol.l	#8,d1
+			move.b	d1,(a0)+
+			rol.l	#8,d1
+			move.b	d1,(a0)+
+			addq.w	#1,a1
+			move.b	(a1)+,d2
+			mulu	#60,d2
+			move.b	(a1)+,d0
+			add.l	d0,d2
+			subq.l	#2,d2
+			mulu	#75,d2
+			sub.l	d1,d2
+			rol.l	#8,d2
+			move.b	d2,(a0)+
+			rol.l	#8,d2
+			move.b	d2,(a0)+
+			rol.l	#8,d2
+			move.b	d2,(a0)+
+			rol.l	#8,d2
+			move.b	d2,(a0)+
+
+			pea	SCSI_DATABuf
+			clr.l	-(sp)
+			clr.l	-(sp)
+			clr.l	-(sp)
+			pea	?_Data(pc)
+			move.l	#12,-(sp)
+			bsr	SCSI_SELECT
+			lea	24(sp),sp
+			tst.w	d0
+			bne	?_Err_Read
+			moveq.l	#0,d0
+			move.l	d0,(ReturnResult)
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		  ?_Err_Read::
+			moveq.l	#$f2,d0
+			move.l	d0,(ReturnResult)
+			moveq.l	#0,d0
+			bra	?_Quit
+
+		  ?_Data::
+			dc.b	$A5,$00
+		  ?_Data2::
+			dc.b	$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+
+		}
+
+
+*************************************************************************
+
+
+*	long	StopAudio( void );
+*
+*		オーディオ再生停止を行なう。
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_DataBufferPtr	データバッファへのポインタ
+*				REQH_SPIOCTRLCmd	内部コマンド番号
+*				REQH_Result		結果を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ StopAudio ] {
+			@return	[ d0, ErrCode ].l;
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			move.l	(SCSI_ID),d4
+			andi.l	#$0007ffff,d4
+ .if 0
+			moveq.l	#0,d3
+			SCSI	_S_STARTSTOP
+ .endif
+			moveq.l	#1,d3
+			SCSI	_S_STARTSTOP
+			moveq.l	#0,d0
+			move.l	d0,(ReturnResult)
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+
+		}
+
+
+*************************************************************************
+
+
+*	long	PauseResume( void );
+*
+*		オーディオのポーズを行なう。
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_DataBufferPtr	データバッファへのポインタ
+*				REQH_SPIOCTRLCmd	内部コマンド番号
+*				REQH_Result		結果を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ PauseResume ] {
+			@return	[ d0, ErrCode ].l;
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			move.l	REQH_DataBufferPtr(a5),a1
+			lea	?_Data2(pc),a0
+			move.l	(a1),d0
+			move.b	d0,(a0)
+
+			pea	SCSI_DATABuf
+			clr.l	-(sp)
+			clr.l	-(sp)
+			clr.l	-(sp)
+			pea	?_Data(pc)
+			move.l	#10,-(sp)
+			bsr	SCSI_SELECT
+			lea	24(sp),sp
+			tst.w	d0
+			bne	?_Err_Read
+			moveq.l	#0,d0
+			move.l	d0,(ReturnResult)
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		  ?_Err_Read::
+			moveq.l	#$f2,d0
+			move.l	d0,(ReturnResult)
+			moveq.l	#0,d0
+			bra	?_Quit
+
+		  ?_Data::
+			dc.b	$4b,$00,$00,$00,$00,$00,$00,$00
+		  ?_Data2::
+			dc.b	$00,$00
+
+		}
+
+
+*************************************************************************
+
+
+*	long	ReadSubChannel( void );
+*
+*		サブチャネルデータを読む。
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_DataBufferPtr	データバッファへのポインタ
+*				REQH_SPIOCTRLCmd	内部コマンド番号
+*				REQH_Result		結果を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ ReadSubChannel ] {
+			@return	[ d0, ErrCode ].l;
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			move.l	REQH_DataBufferPtr(a5),a1
+			lea	SCSI_DATABuf,a0
+
+			move.l	a0,-(sp)
+			move.l	#$10,-(sp)
+			clr.l	-(sp)
+			clr.l	-(sp)
+			pea	?_Data(pc)
+			move.l	#10,-(sp)
+			bsr	SCSI_SELECT
+			lea	24(sp),sp
+			tst.w	d0
+			bne	?_Err_Read
+
+			move.b	$01(a0),d0
+			beq	?_1
+			cmpi.b	#$14,d0
+			bcc	?_1
+			cmpi.b	#$13,d0
+			bcs	?_2
+			subq.w	#1,d0
+		  ?_2::
+			subi.b	#$11,d0
+			bra	?_3
+		  ?_1::
+			moveq.l	#1,d0
+		  ?_3::
+			move.b	d0,(a1)+
+			move.b	$07(a0),(a1)+
+			move.b	$06(a0),(a1)+
+			move.b	$0c(a0),(a1)+
+			move.b	$0d(a0),(a1)+
+			move.b	$0e(a0),(a1)+
+			addq.w	#1,a1
+			move.b	$08(a0),(a1)+
+			move.b	$09(a0),(a1)+
+			move.b	$0a(a0),(a1)+
+
+			moveq.l	#0,d0
+			move.l	d0,(ReturnResult)
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		  ?_Err_Read::
+			moveq.l	#$f2,d0
+			move.l	d0,(ReturnResult)
+			moveq.l	#0,d0
+			bra	?_Quit
+
+		  ?_Data::
+			dc.b	$42,$02,$40,$01,$00,$00,$00,$00,$10,$00
+
+		}
+
+
+*************************************************************************
+
+
+*	long	DrvCtrl( void );
+*
+*		ドライブコントロールを行なう。
+*		in	a5	リクエストヘッダ
+*				REQH_Magic00		常に26
+*				REQH_UnitNo		ユニット番号
+*				REQH_InnerCmd		内部コマンド
+*				REQH_DriveStatus	ドライブの状態を返す
+*		out	d0	エラーコード
+
+
+		@xproc	[ DrvCtrl ] {
+			@return	[ d0, ErrCode ].l;
+			movem.l	d1-d7/a0-a6,-(sp)
+
+		  ?_Entry::
+			move.b	REQH_InnerCmd(a5),d0
+			@switch [ d0 ].b {
+			  @case	#1:
+				bsr	?_Eject
+				bra	?_AskExchangeMedia
+			  @case	#2:
+				move.w	(FormatType),d0
+				@ifpl	{
+					st.b	(DisableUserEjectFlag)
+					bsr	?_SetMediaEjectSwitch
+				}
+				bra	?_AskExchangeMedia
+			  @case	#3:
+				clr.b	(DisableUserEjectFlag)
+				bsr	?_SetMediaEjectSwitch
+				bra	?_AskExchangeMedia
+			  @case	#6:
+				move.w	(FormatType),d0
+				@ifpl	{
+					st.b	(DisableOSEjectFlag)
+					bsr	?_SetMediaEjectSwitch
+				}
+				bra	?_AskExchangeMedia
+			  @case	#7:
+				clr.b	(DisableOSEjectFlag)
+				bsr	?_SetMediaEjectSwitch
+				bra	?_AskExchangeMedia
+
+			  @case	#9:
+ .if 0	* 挿入時だけ遅延処理、非挿入時はリアルタイム
+				tst.b	(ReqRemakeDPB)
+				bcl	?_AskExchangeMedia_Time
+				tst.b	(ReqAskSCSIConnect)
+				bst	?_AskExchangeMedia_Time
+				bra	?_AskExchangeMedia
+ .else	* 常に遅延処理
+				bra	?_AskExchangeMedia_Time
+ .endif
+
+			  @default:
+				cmpi.b	#8+1,d0
+				@ifcc	{
+					moveq.l	#$ff,d0
+					bra	?_e
+				}
+				@break;
+
+			}
+
+			tst.b	(ReqRemakeDPB)
+			bst	?_GetStatus
+			tst.w	(FormatType)
+			bmi	?_GetStatus
+
+		  ?_AskExchangeMedia_Time::
+			bsr	GetTime
+			move.l	(LastAccessTime),d2
+			move.l	(LastAccessDate),d3
+			sub.l	d3,d1
+			@ifne	{
+				add.l	#8640000,d0
+			}
+			sub.l	d2,d0
+			tst.b	(ReqRemakeDPB)
+			@ifst	{
+				cmp.l	(SpOption_TIN),d0
+			} @else {
+				cmp.l	(SpOption_TEJ),d0
+			}
+			bcs	?_GetStatus
+
+		  ?_AskExchangeMedia::
+			bsr	AskExchangeMedia
+
+		  ?_GetTime::
+			bsr	GetTime
+			move.l	d0,(LastAccessTime)
+			move.l	d1,(LastAccessDate)
+		  ?_GetStatus::
+			moveq.l	#$42,d0
+			tst.b	(ReqRemakeDPB)
+			@ifst	{
+				bclr	#1,d0
+				bset	#2,d0
+			}
+			tst.w	(FormatType)
+			@ifmi	{
+				bset	#0,d0
+			}
+			tst.b	(SCSI_RemovableFlag)
+			@ifst	{
+				bclr	#6,d0
+			}
+			tst.b	(SCSI_WriteProtectFlag)
+			@ifst	{
+				bset	#3,d0
+			}
+			tst.b	(ForceProtectFlag)
+			@ifst	{
+				bset	#3,d0
+			}
+			btst	#1,d0
+			@ifcl	{
+				bclr	#3,d0
+			}
+			move.b	REQH_UnitNo(a5),d1
+			cmp.b	(DPBCount),d1
+			@ifcc	{
+				bclr	#1,d0
+				bset	#2,d0
+			}
+			move.b	REQH_InnerCmd(a5),d1
+			@ifne	{
+				bclr	#2,d0
+				bclr	#3,d0
+			}
+			cmpi.b	#8,d1
+			@ifeq	{
+				moveq.l	#-1,d0
+				tst.b	(LastExchangeFlag)
+				@ifst	{
+					moveq.l	#-1,d0
+				}
+				move.b	(ReqRemakeDPB),(LastExchangeFlag)
+			}
+			cmpi.b	#9,d1
+			@ifeq	{
+				bset	#1,d0
+				bclr	#2,d0
+				tst.b	(RealEjectedFlag)
+				@ifst	{
+					moveq.l	#0,d0
+				}
+			}
+
+		  ?_e::
+			move.b	d0,REQH_DriveStatus(a5)
+			moveq.l	#0,d0
+			bra	?_Quit
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		  ?_Eject::
+			move.b	(DisableUserEjectFlag),d0
+			or.b	(DisableOSEjectFlag),d0
+			@ifeq	{
+				tst.b	(SCSI_RemovableFlag)
+				@ifst	{
+					bsr	?_Eject_Core
+				}
+			}
+			rts
+
+		  ?_Eject_Core::
+			move.l	(SCSI_ID),d4
+			andi.l	#$0007ffff,d4
+			SCSI	_S_TESTUNIT
+			tst.l	d0
+			@ifeq	{
+				moveq.l	#0,d3
+				SCSI	_S_PAMEDIUM
+				lea	SCSI_REQUESTBuf,a1
+				moveq.l	#$10,d3
+				SCSI	_S_REQUEST
+				moveq.l	#2,d3
+				SCSI	_S_STARTSTOP
+				tst.l	d0
+				@ifne	{
+					tst.b	(SCSI_CZ6MO1Flag)
+					@ifst	{
+						moveq.l	#0,d3
+						SCSI	_S_EJECT6MO1
+					}
+				}
+				moveq.l	#1,d3
+				SCSI	_S_REZEROUNIT
+			}
+			rts
+
+		  ?_SetMediaEjectSwitch::
+			move.l	(SCSI_ID),d4
+			andi.l	#$0007ffff,d4
+			SCSI	_S_TESTUNIT
+			tst.l	d0
+			@ifeq	{
+				moveq.l	#0,d3
+				move.b	(DisableUserEjectFlag),d0
+				or.b	(DisableOSEjectFlag),d0
+				@ifst	{
+					moveq.l	#1,d3
+				}
+				SCSI	_S_PAMEDIUM
+			}
+			rts
+
+		}
+
+
+*************************************************************************
+
+
+*	long	RemakeDPB( void );
+*
+*		DPBを再構築する。
+*		in	なし
+*		out	d0	エラーコード
+
+
+		@xproc	[ RemakeDPB ] {
+			@return	[ d0, ErrCode ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			tst.b	(ForceEjectFlag)
+			bst	?_ForceEject
+
+			bsr	FlushCDROMCache
+
+		  ?_Entry::
+			clr.b	(RemakeDPBRetryFlag)
+			st.b	(SCSI_RemovableFlag)
+			st.b	(RealEjectedFlag)
+
+		  ?_Retrylp::
+			clr.b	(DPBCount)
+			move.w	#SDD_FormatType_ERROR3,(FormatType)
+
+			* レディ確認
+			move.l	(SCSI_ID),d4
+			andi.l	#$0007ffff,d4
+			tst.b	(ReqSendRezeroUnit)
+			@ifst	{
+				clr.b	(ReqSendRezeroUnit)
+				tst.b	(SCSI_NoREZEROUNITFlag)
+				@ifcl	{
+					moveq.l	#1,d3
+					SCSI	_S_REZEROUNIT
+				}
+			}
+			SCSI	_S_TESTUNIT	* エラーステータスを消すためダミー発行
+			tst.l	d0
+			bmi	?_UnreadyMedia
+
+			* Inquiry情報取得
+			lea	SCSI_INQUIRYBuf,a1
+			move.l	#$24,d3
+			SCSI	_S_INQUIRY
+			tst.l	d0
+			bne	?_UnreadyMedia
+
+			* デバイスタイプ判別
+			move.b	2(a1),(SCSI_Version)
+			move.b	0(a1),d0
+			andi.b	#$1f,d0
+			move.b	d0,(SCSI_DeviceType)
+			@switch [ d0 ].b {
+			  @case	#$00:
+			  @case	#$07:
+				move.w	#$4040,(DEVH_Flag+__SUSIEDEVH)
+				moveq.l	#0,d0
+				@break;
+			  @case	#$05:
+				move.w	#$2040,(DEVH_Flag+__SUSIEDEVH)
+				moveq.l	#1,d0
+				@break;
+			  @default:
+				bra	?_Unready
+			}
+			move.w	(SDDMode),d1
+			move.w	d0,(SDDMode)
+			cmp.w	d1,d0
+			@ifne	{
+				bsr	InitDPB
+			}
+			tst.b	1(a1)
+			smi	(SCSI_RemovableFlag)
+			clr.b	(SCSI_CZ6MO1Flag)
+			@if [ cmpi.l #'SHAR',8(a1) ].eq {
+				st.b	(SCSI_CZ6MO1Flag)
+			}
+
+			move.w	#SDD_FormatType_ERROR,(FormatType)
+
+			* レディ再確認
+			SCSI	_S_TESTUNIT
+			tst.l	d0
+			bne	?_UnreadyMedia
+
+			* 容量取得
+			lea	SCSI_READCAPBuf,a1
+			SCSI	_S_READCAP
+			tst.l	d0
+			bne	?_UnreadyMedia
+			move.l	0(a1),(SCSI_TotalBlock)
+			move.l	4(a1),d0
+			@switch [ d0 ].l {
+			  @case	#256:
+				moveq.l	#0,d1
+				@break;
+			  @case	#512:
+				moveq.l	#1,d1
+				@break;
+			  @case	#1024:
+				moveq.l	#2,d1
+				@break;
+			  @case	#2048:
+				moveq.l	#3,d1
+				@break;
+			  @default:
+				bra	?_Unready
+			}
+			move.w	d0,(SCSI_BlockCapacityByte)
+			move.b	d1,(SCSI_BlockCapacity)
+
+			* 容量に応じて強制的にRWEXTを使用するように設定する
+			cmpi.l	#$200000,(SCSI_TotalBlock)
+			@ifcc	{
+				* TotalBlockが$200000以上の場合はRWEXTが必須
+				move.b	#1,(SCSI_TestRWEXTFlag)
+			}
+
+			* モードセンス(Page $3F)よりライトプロテクト情報を取得
+			lea	SCSI_MODESENSEBuf,a1
+			moveq.l	#$3f,d2
+			moveq.l	#32,d3
+			moveq.l	#0,d5
+			move.b	(SCSI_BlockCapacity),d5
+			SCSI	_S_MODESENSE
+			tst.l	d0
+			bne	?_UnreadyMedia
+			tst.b	2(a1)
+			smi	(SCSI_WriteProtectFlag)
+			tst.b	(ForceProtectFlag)
+			@ifst	{
+				st.b	(SCSI_WriteProtectFlag)
+			}
+
+			* モードセンス(Page $03,$04)よりシリンダサイズ情報を取得
+			move.w	#$200,(SCSI_CylinderSize)
+			lea	SCSI_MODESENSEBuf,a1
+			moveq.l	#$03,d2
+			moveq.l	#32,d3
+			moveq.l	#0,d5
+			move.b	(SCSI_BlockCapacity),d5
+			SCSI	_S_MODESENSE
+			tst.l	d0
+			@ifeq	{
+				move.w	$16(a1),d6
+				moveq.l	#$04,d2
+				SCSI	_S_MODESENSE
+				tst.l	d0
+				@ifeq	{
+					* ModeSense3(Sector/Track)×ModeSense4(Head)
+					moveq.l	#0,d0
+					move.b	$11(a1),d0
+					mulu	d6,d0
+					move.w	d0,(SCSI_CylinderSize)
+					* TotalBlock÷ModeSense4(Cylinder)
+					move.l	$04(a1),d0
+					@ifeq	{
+						move.l	(SCSI_TotalBlock),d0
+					}
+					moveq.l	#0,d1
+					move.w	$0e(a1),d1
+					lsl.l	#8,d1
+					move.b	$10(a1),d1
+					tst.l	d1
+					@ifne	{
+						movem.l	d2-d7/a0-a6,-(sp)
+						move.l	d1,-(sp)
+						move.l	d0,-(sp)
+						bsr	___udivsi3
+						addq.w	#8,sp
+						movem.l	(sp)+,d2-d7/a0-a6
+					} @else {
+						moveq.l	#0,d0
+					}
+					move.w	d0,(SCSI_CylinderSize2)
+					tst.w	d0
+					@ifeq	{
+						move.w	d0,(SCSI_CylinderSize)
+					}
+				}
+			}
+
+			* ブートセクタよりフォーマットを判別
+			move.w	(SDDMode),d0
+			beq	?_GetFormat_Normal
+			cmpi.w	#1,d0
+			beq	?_GetFormat_Special
+			bra	?_UnreadyMedia
+
+		  ?_GetFormat_Special::
+			* モードセレクト
+			@do {
+				moveq.l	#$10,d2
+				moveq.l	#$0c,d3
+				lea	[ $00,$00,$00,$08,$83,$00,$00,$00,$00,$00,$08,$00 ],a1
+				SCSI	_S_MODESELECT
+				tst.l	d0
+				@break.eq;
+				cmpi.l	#SCSI_BUSYCODE,d0
+				@continue.eq;
+				cmpi.l	#SCSI_REQCODE,d0
+				@break.ne;
+				bsr	SCSI_S_REQUEST
+				cmpi.w	#6,d0
+				@continue.eq;
+				@break;
+			} @while.t;
+			@if [ tst.l d0 ].ne @and
+			    [ cmpi.b #$05,(2+SCSI_REQUESTBuf) ].ne {
+				@do {
+					moveq.l	#$10,d2
+					moveq.l	#$0c,d3
+					lea	[ $00,$00,$00,$08,$00,$00,$00,$00,$00,$00,$08,$00 ],a1
+					SCSI	_S_MODESELECT
+					tst.l	d0
+					@break.eq;
+					cmpi.l	#SCSI_BUSYCODE,d0
+					@continue.eq;
+					cmpi.l	#SCSI_REQCODE,d0
+					@break.ne;
+					bsr	SCSI_S_REQUEST
+					cmpi.w	#6,d0
+					@continue.eq;
+					@break;
+				} @while.t;
+			}
+
+			move.l	#$80,(DivideAccessSize)
+			lea	CDROMHeadSecReadBuf,a1
+			clr.b	(a1)
+			move.l	#-1,(CDROM_DataAddress)
+			bsr	FindDataTOC
+			tst.l	d0
+			bpl	?_GetFormat_Special_TrackLoop
+
+			move.b	(SCSI_Version),d0
+			andi.b	#$07,d0
+			cmpi.b	#2,d0
+			bcs	?_GetFormat_Special_TrackLoop
+			bra	?_GetFormat_Special_GetAudio
+
+		  ?_GetFormat_Special_TrackLoop::
+			lea	CDROMHeadSecReadBuf,a1
+			moveq.l	#16,d2
+			add.l	(FindDataTOC_DataAddress),d2
+			moveq.l	#1,d3
+			moveq.l	#0,d5
+			move.b	(SCSI_BlockCapacity),d5
+			clr.b	(SCSI_RWEXTCmdFlag)
+ .if 1	* TestRWEXTが１のときだけRWEXTをチェックする
+			tst.b	(SCSI_TestRWEXTFlag)
+			@ifst	{
+				SCSI	_S_READEXT
+				tst.l	d0
+				@ifeq	{
+					move.l	#$ffff,(DivideAccessSize)
+					st.b	(SCSI_RWEXTCmdFlag)
+				} @else {
+					SCSI	_S_READ
+				}
+			} @else {
+				SCSI	_S_READ
+			}
+ .else	* 常にチェックする
+			SCSI	_S_READEXT
+			tst.l	d0
+			@ifeq	{
+				move.l	#$ffff,(DivideAccessSize)
+				st.b	(SCSI_RWEXTCmdFlag)
+			} @else {
+				SCSI	_S_READ
+			}
+ .endif
+			tst.l	d0
+			@ifeq	{
+				* ISO9660
+				cmpi.b	#$01,0(a1)
+				bne	>
+				cmpi.b	#'C',1(a1)
+				bne	>
+				cmpi.l	#'D001',2(a1)
+				beq	?_CDROM_ISO9660_OK
+				cmpi.l	#'DROM',2(a1)
+				beq	?_CDROM_ISO9660_OK
+				bra	>
+			  ?_CDROM_ISO9660_OK:
+				move.w	#SDD_FormatType_ISO9660,(FormatType)
+				move.l	(FindDataTOC_DataAddress),(CDROM_DataAddress)
+				move.w	$82(a1),(CDROM_SectorSize)
+			}
+
+		  ?_GetFormat_Special_Next::
+			bsr	FindDataTOCNext
+			tst.l	d0
+			bpl	?_GetFormat_Special_TrackLoop
+			tst.l	(CDROM_DataAddress)
+			bpl	?_GetFormat_CDROM
+
+		  ?_GetFormat_Special_GetAudio::
+			move.w	#SDD_FormatType_ERROR2,(FormatType)
+			bsr	FindDataTOC
+			cmpi.l	#-1,d0
+			@ifeq	{
+				move.w	#SDD_FormatType_Audio,(FormatType)
+			}
+			bra	?_Unready
+
+		  ?_GetFormat_CDROM::
+			lea	CDROMHeadSecReadBuf,a1
+			moveq.l	#16,d2
+			add.l	(CDROM_DataAddress),d2
+			moveq.l	#1,d3
+			moveq.l	#0,d5
+			move.b	(SCSI_BlockCapacity),d5
+			clr.b	(SCSI_RWEXTCmdFlag)
+ .if 1	* TestRWEXTが１のときだけRWEXTをチェックする
+			tst.b	(SCSI_TestRWEXTFlag)
+			@ifst	{
+				SCSI	_S_READEXT
+				tst.l	d0
+				@ifeq	{
+					move.l	#$ffff,(DivideAccessSize)
+					st.b	(SCSI_RWEXTCmdFlag)
+				} @else {
+					SCSI	_S_READ
+				}
+			} @else {
+				SCSI	_S_READ
+			}
+ .else	* 常にチェックする
+			SCSI	_S_READEXT
+			tst.l	d0
+			@ifeq	{
+				move.l	#$ffff,(DivideAccessSize)
+				st.b	(SCSI_RWEXTCmdFlag)
+			} @else {
+				SCSI	_S_READ
+			}
+ .endif
+			bsr	InitDPB
+
+			move.b	#1,(DPBCount)
+
+			* 仮想ボリュームインデックスを作る
+			clr.b	(VolumeEIS9)
+			move.w	(FormatType),d0
+			@switch [ d0 ].w {
+			  @case #SDD_FormatType_ISO9660:
+				movem.l	a0/a1/a2,-(sp)
+				lea	EIS9_Name+VolumeEIS9,a0
+				lea	$28(a1),a2
+				moveq.l	#0,d1
+				@do {
+					move.b	(a2)+,d0
+					cmpi.b	#' '+1,d0
+					@break.cs;
+					move.b	d0,(a0)+
+					addq.b	#1,d1
+				} @while [ cmpi.b #18,d1 ].cs;
+				clr.b	(a0)
+				lea	VolumeEIS9,a0
+				move.b	d1,EIS9_NameSize(a0)
+				addi.b	#$21,d1
+				move.b	d1,EIS9_EntrySize(a0)
+
+				lea	$32d(a1),a2
+				moveq.l	#0,d0
+				moveq.l	#0,d1
+				move.b	(a2)+,d0
+				subi.b	#'0',d0
+				add.l	d0,d1
+				mulu	#10,d1
+				move.b	(a2)+,d0
+				subi.b	#'0',d0
+				add.l	d0,d1
+				mulu	#10,d1
+				move.b	(a2)+,d0
+				subi.b	#'0',d0
+				add.l	d0,d1
+				mulu	#10,d1
+				move.b	(a2)+,d0
+				subi.b	#'0',d0
+				add.l	d0,d1
+				subi.w	#1900,d1
+				move.b	d1,EIS9_Year(a0)
+				moveq.l	#0,d1
+				move.b	(a2)+,d0
+				subi.b	#'0',d0
+				add.l	d0,d1
+				mulu	#10,d1
+				move.b	(a2)+,d0
+				subi.b	#'0',d0
+				add.l	d0,d1
+				move.b	d1,EIS9_Month(a0)
+				moveq.l	#0,d1
+				move.b	(a2)+,d0
+				subi.b	#'0',d0
+				add.l	d0,d1
+				mulu	#10,d1
+				move.b	(a2)+,d0
+				subi.b	#'0',d0
+				add.l	d0,d1
+				move.b	d1,EIS9_Day(a0)
+
+				moveq.l	#0,d1
+				move.b	(a2)+,d0
+				subi.b	#'0',d0
+				add.l	d0,d1
+				mulu	#10,d1
+				move.b	(a2)+,d0
+				subi.b	#'0',d0
+				add.l	d0,d1
+				move.b	d1,EIS9_Hour(a0)
+				moveq.l	#0,d1
+				move.b	(a2)+,d0
+				subi.b	#'0',d0
+				add.l	d0,d1
+				mulu	#10,d1
+				move.b	(a2)+,d0
+				subi.b	#'0',d0
+				add.l	d0,d1
+				move.b	d1,EIS9_Min(a0)
+				moveq.l	#0,d1
+				move.b	(a2)+,d0
+				subi.b	#'0',d0
+				add.l	d0,d1
+				mulu	#10,d1
+				move.b	(a2)+,d0
+				subi.b	#'0',d0
+				add.l	d0,d1
+				lsr.l	#1,d1
+				move.b	d1,EIS9_Sec(a0)
+
+				movem.l	(sp)+,a0/a1/a2
+				@break;
+			}
+
+			clr.b	(ReqRemakeDPB)
+			clr.b	(ReqAskSCSIConnect)
+			clr.b	(RealEjectedFlag)
+			moveq.l	#0,d0
+			bra	?_Quit
+
+		  ?_GetFormat_Normal::
+			move.l	#$80,(DivideAccessSize)
+			lea	BootSecReadBuf,a1
+			moveq.l	#0,d2
+			moveq.l	#1,d3
+			moveq.l	#0,d5
+			move.b	(SCSI_BlockCapacity),d5
+			clr.b	(SCSI_RWEXTCmdFlag)
+ .if 1	* TestRWEXTが１のときだけRWEXTをチェックする
+			tst.b	(SCSI_TestRWEXTFlag)
+			@ifst	{
+				SCSI	_S_READEXT
+				tst.l	d0
+				@ifeq	{
+					move.l	#$ffff,(DivideAccessSize)
+					st.b	(SCSI_RWEXTCmdFlag)
+				} @else {
+					SCSI	_S_READ
+				}
+			} @else {
+				SCSI	_S_READ
+			}
+ .else	* 常にチェックする
+			SCSI	_S_READEXT
+			tst.l	d0
+			@ifeq	{
+				move.l	#$ffff,(DivideAccessSize)
+				st.b	(SCSI_RWEXTCmdFlag)
+			} @else {
+				SCSI	_S_READ
+			}
+ .endif
+			tst.l	d0
+			bne	?_UnreadyMedia
+
+			clr.b	(ReqRemakeDPB)
+			clr.b	(ReqAskSCSIConnect)
+			clr.b	(RealEjectedFlag)
+			{
+				* X68000
+				move.w	#SDD_FormatType_X68000,(FormatType)
+				cmpi.l	#'X68S',0(a1)
+				bne	@f
+				cmpi.l	#'CSI1',4(a1)
+				beq	>
+			  @@:
+				* PC98
+				move.w	#SDD_FormatType_PC9801,(FormatType)
+				cmpi.l	#'IPL1',4(a1)
+				beq	>
+			  @@:
+				* TOWNS
+				move.w	#SDD_FormatType_FMTOWNS,(FormatType)
+				cmpi.l	#'IPL4',0(a1)
+				beq	>
+			  @@:
+				* ZIP					** TNB
+									*(ここは単純に書き間違いを直しただけ)
+				move.w	#SDD_FormatType_ZIP,(FormatType)
+				cmpi.l	#'IPAR',2(a1)
+				beq	>
+			  @@:
+				* IBM FDISK
+				move.w	#SDD_FormatType_IBMFDISK,(FormatType)
+				cmpi.w	#$55aa,$1fe(a1)
+				bne	@f
+				cmpi.b	#$b8,0(a1)	* Adaptec純正
+				beq	>
+				cmpi.b	#$fa,0(a1)	* Tsuru-Zoh
+				beq	>
+				cmpi.b	#$00,0(a1)	* REXFMT.EXE
+				beq	>
+			  @@:
+				* IBM Standard-MO
+				move.w	#SDD_FormatType_IBMMO,(FormatType)
+				cmpi.w	#$55aa,$1fe(a1)
+				bne	@f
+				cmpi.b	#$eb,0(a1)	* Adaptec純正
+				beq	>
+			  @@:
+
+
+									*---------- TNB
+						* DPB になるところをチェック。
+						* 大きさをみてます。
+						* メディア ID は見てません。念のため ^^;
+				* 2HD
+				move.w	#SDD_FormatType_2HD,(FormatType)
+				move.b	(SCSI_BlockCapacity),d0
+				cmpi.b	#2,d0			* 1024b/s か？
+				bne	@f
+				cmpi.w	#$0401,$0c(a1)
+				bne	@f
+				cmpi.b	#$d0,$13(a1)
+				bne	@f
+				cmpi.b	#$04,$14(a1)
+				beq	>
+			  @@:
+						* 68 の FORMAT で 2HD(144)等を
+						* 作った時など、上の IBM チェック
+						* で分からない物があるので
+				* IBM Standard (2DD)
+				move.w	#SDD_FormatType_IBMMO,(FormatType)
+				move.b	(SCSI_BlockCapacity),d0
+				cmpi.b	#1,d0			* 512b/s か？
+				bne	@f
+				cmpi.w	#$0202,$0c(a1)
+				bne	@f
+				cmpi.b	#$a0,$13(a1)
+				bne	@f
+				cmpi.b	#$05,$14(a1)
+				beq	>
+			  @@:
+				* IBM Standard (2HD144)
+				move.w	#SDD_FormatType_IBMMO,(FormatType)
+				move.b	(SCSI_BlockCapacity),d0
+				cmpi.b	#1,d0			* 512b/s か？
+				bne	@f
+				cmpi.w	#$0201,$0c(a1)
+				bne	@f
+				cmpi.b	#$40,$13(a1)
+				bne	@f
+				cmpi.b	#$0b,$14(a1)
+				beq	>
+			  @@:
+				* 2HC
+				move.w	#SDD_FormatType_IBMMO,(FormatType)
+				move.b	(SCSI_BlockCapacity),d0
+				cmpi.b	#1,d0			* 512b/s か？
+				bne	@f
+				cmpi.w	#$0201,$0c(a1)
+				bne	@f
+				cmpi.b	#$60,$13(a1)
+				bne	@f
+				cmpi.b	#$09,$14(a1)
+				beq	>
+			  @@:
+						* 昔の 68 の FORMAT 用
+				* 2HD(HUDSON)
+				move.w	#SDD_FormatType_2HD,(FormatType)
+				move.b	(SCSI_BlockCapacity),d0
+				cmpi.b	#2,d0			* 1024b/s か？
+				bne	@f
+				cmpi.l	#$48756473,$02(a1)
+				bne	@f
+				cmpi.w	#$6F6E,$06(a1)
+				beq	>
+			  @@:
+									*---------- TNB
+
+
+				move.w	#SDD_FormatType_ERROR2,(FormatType)
+				bra	?_Unready
+			}
+
+			* IOCS _S_VERIFYが使用できるかどうか調べる
+			clr.b	(SCSI_VerifyCmdFlag)
+			move.b	(SCSI_VERIFYMode),d0
+			@switch [ d0 ].b {
+			  @case	#1:
+				lea	BootSecReadBuf,a1
+				moveq.l	#0,d2
+				moveq.l	#1,d3
+				moveq.l	#0,d5
+				move.b	(SCSI_BlockCapacity),d5
+				SCSI	_S_VERIFY
+				tst.l	d0
+				@ifeq	{
+					st.b	(SCSI_VerifyCmdFlag)
+				} @else {
+					SCSI	_S_TESTUNIT	* エラーステータスを消すためダミー発行
+					SCSI	_S_TESTUNIT	* エラーステータスを消すためダミー発行
+				}
+				@break;
+			  @case	#2:
+				st.b	(SCSI_VerifyCmdFlag)
+				@break;
+			}
+
+			move.w	(FormatType),d0
+			bmi	?_Unready
+			cmpi.w	#SDD_FormatType_End1,d0
+			bhi	?_Unready
+			add.w	d0,d0
+			lea	?_GetPartSec_JpTable(pc),a1
+			move.w	(a1,d0.w),d0
+			jsr	(a1,d0.w)
+			tst.l	d0
+			bmi	?_Unready
+
+			bsr	InitDPB
+
+			* パーティション作成
+			lea	PartitionSecReadBuf,a2
+			lea	DPBTable,a3
+			lea	DPBBuf,a4
+			@repeat [ d7, #MAXDPB-1 ].q {
+				move.w	(FormatType),d0
+				@continue.mi;
+				add.w	d0,d0
+				lea	?_GetIPLSec_JpTable(pc),a1
+				move.w	(a1,d0.w),d0
+				jsr	(a1,d0.w)
+				tst.l	d0
+				@continue.ne;
+
+				* DPB情報作成その４（デバイスドライバ関連）
+				move.b	(DPBCount),d0
+				move.b	d0,XDPB_UnitNo(a4)
+
+				* Next
+				addq.b	#1,(DPBCount)
+				lea	SizeOf1DPBTable(a3),a3
+				lea	SizeOfXDPB(a4),a4
+			}
+
+ .if 0
+			clr.b	(ReqRemakeDPB)
+			clr.b	(ReqAskSCSIConnect)
+			clr.b	(RealEjectedFlag)
+ .endif
+			moveq.l	#0,d0
+			bra	?_Quit
+
+		  ?_UnreadyMedia::
+			tst.b	(SCSI_WaitBusyFlag)
+			@ifst	{
+				cmpi.l	#SCSI_BUSYCODE,d0
+				@ifeq	{
+					bsr	WaitSec
+					bra	?_Retrylp
+				}
+			}
+			addq.b	#1,(RemakeDPBRetryFlag)
+			cmpi.b	#RETRYCOUNT,(RemakeDPBRetryFlag)
+			bcs	?_Retrylp
+		  ?_Unready::
+			st.b	(RealEjectedFlag)
+			moveq.l	#-1,d0
+			bra	?_Quit
+
+		  ?_ForceEject::
+			st.b	(RealEjectedFlag)
+			clr.b	(DPBCount)
+			moveq.l	#-1,d0
+			bra	?_Quit
+
+		  ?_Quit::
+			tst.b	(DPBCount)
+			@ifeq	{
+				tst.w	(FormatType)
+				@ifpl	{
+					move.w	#SDD_FormatType_ERROR2,(FormatType)
+				}
+				addq.b	#1,(DPBCount)
+			}
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+			* パーティションセクタを取得
+		  ?_GetPartSec_JpTable::
+			dc.w	?_GetPartSec_X68-?_GetPartSec_JpTable
+			dc.w	?_GetPartSec_PC98-?_GetPartSec_JpTable
+			dc.w	?_GetPartSec_TOWNS-?_GetPartSec_JpTable
+			dc.w	?_GetPartSec_IBM-?_GetPartSec_JpTable
+			dc.w	?_GetPartSec_IBMFDISK-?_GetPartSec_JpTable
+			dc.w	?_GetPartSec_ZIP-?_GetPartSec_JpTable
+									*---------- TNB
+			dc.w	?_GetPartSec_2HD-?_GetPartSec_JpTable
+									*---------- TNB
+
+		  ?_GetPartSec_Unready::
+			moveq.l	#-1,d0
+			rts
+
+		  ?_GetPartSec_X68::
+			lea	PartitionSecReadBuf,a1
+			moveq.l	#8,d2
+			move.b	(SCSI_BlockCapacity),d0
+			lsr.l	d0,d2
+			moveq.l	#1,d3
+			moveq.l	#0,d5
+			move.b	(SCSI_BlockCapacity),d5
+			bsr	SCSI_S_READ
+			tst.l	d0
+			bne	?_GetPartSec_Unready
+			lea	PartitionSecReadBuf,a2
+			cmpi.l	#'X68K',0(a2)
+			bne	?_GetPartSec_Unready
+			moveq.l	#0,d0
+			rts
+
+		  ?_GetPartSec_PC98::
+			clr.l	(PC98GetIPLRetryCount)
+			lea	PartitionSecReadBuf,a1
+			moveq.l	#1,d2
+			moveq.l	#1,d3
+			moveq.l	#0,d5
+			move.b	(SCSI_BlockCapacity),d5
+			bsr	SCSI_S_READ
+			tst.l	d0
+			bne	?_GetPartSec_Unready
+			moveq.l	#0,d0
+			rts
+
+		  ?_GetPartSec_TOWNS::
+			lea	PartitionSecReadBuf,a1
+			moveq.l	#1,d2
+			moveq.l	#1,d3
+			moveq.l	#0,d5
+			move.b	(SCSI_BlockCapacity),d5
+			bsr	SCSI_S_READ
+			tst.l	d0
+			bne	?_GetPartSec_Unready
+			lea	PartitionSecReadBuf,a2
+			cmpi.l	#'富士',0(a2)
+			bne	?_GetPartSec_Unready
+			cmpi.w	#'通',4(a2)
+			bne	?_GetPartSec_Unready
+			moveq.l	#0,d0
+			rts
+
+		  ?_GetPartSec_IBM::
+		  ?_GetPartSec_2HD::
+			moveq.l	#0,d0
+			rts
+
+		  ?_GetPartSec_IBMFDISK::
+			clr.l	(IBMFDISKPartSec)
+			clr.l	(IBMFDISKExPartFlag)
+			lea	PartitionSecReadBuf,a1
+			move.l	(IBMFDISKPartSec),d2
+			moveq.l	#1,d3
+			moveq.l	#0,d5
+			move.b	(SCSI_BlockCapacity),d5
+			@ifeq	{
+				add.l	d3,d3
+			}
+			bsr	SCSI_S_READ
+			tst.l	d0
+			bne	?_GetPartSec_Unready
+			moveq.l	#0,d0
+			rts
+
+		  ?_GetPartSec_ZIP::
+			lea	PartitionSecReadBuf,a1
+			moveq.l	#0,d2
+			moveq.l	#1,d3
+			moveq.l	#0,d5
+			move.b	(SCSI_BlockCapacity),d5
+			bsr	SCSI_S_READ
+			tst.l	d0
+			bne	?_GetPartSec_Unready
+			lea	PartitionSecReadBuf,a2
+			cmpi.l	#'IPAR',2(a2)
+			bne	?_GetPartSec_Unready
+			moveq.l	#0,d0
+			rts
+
+			* IPLセクタを取得
+		  ?_GetIPLSec_JpTable::
+			dc.w	?_GetIPLSec_X68-?_GetIPLSec_JpTable
+			dc.w	?_GetIPLSec_PC98-?_GetIPLSec_JpTable
+			dc.w	?_GetIPLSec_TOWNS-?_GetIPLSec_JpTable
+			dc.w	?_GetIPLSec_IBM-?_GetIPLSec_JpTable
+			dc.w	?_GetIPLSec_IBMFDISK-?_GetIPLSec_JpTable
+			dc.w	?_GetIPLSec_ZIP-?_GetIPLSec_JpTable
+									*---------- TNB
+			dc.w	?_GetIPLSec_2HD-?_GetIPLSec_JpTable
+									*---------- TNB
+
+		  ?_GetIPLSec_Unready::
+			moveq.l	#-1,d0
+			rts
+
+		  ?_GetIPLSec_Sub2::
+			move.w	XDPB_SecByte(a4),d0
+			moveq.l	#-1,d1
+			@do {
+				addq.b	#1,d1
+				lsr.w	#1,d0
+			} @while.cc;
+			move.b	d1,XDPB_SftSecByte(a4)
+
+			moveq.l	#0,d1
+			move.b	XDPB_FATNum(a4),d1
+			moveq.l	#0,d2
+			move.b	XDPB_FATSize(a4),d2
+			mulu	d2,d1
+			add.w	XDPB_FATSec(a4),d1
+			move.w	d1,XDPB_RootSec(a4)
+
+			move.w	XDPB_RootEntryNum(a4),d0
+			mulu	#32,d0
+			divu	XDPB_SecByte(a4),d0
+			move.w	XDPB_RootSec(a4),d1
+			add.w	d0,d1
+			move.w	d1,XDPB_DataSec(a4)
+
+			move.b	XDPB_CluSec(a4),d0
+			addq.b	#1,d0
+			moveq.l	#-1,d1
+			@do {
+				addq.b	#1,d1
+				lsr.b	#1,d0
+			} @while.cc;
+			move.b	d1,XDPB_SftCluSec(a4)
+
+			move.l	a4,DPBTable_XDPBPtr(a3)
+			move.w	XDPB_SecByte(a4),d0
+			move.w	(SCSI_BlockCapacityByte),d1
+			moveq.l	#0,d2
+			@while [ cmp.w d0,d1 ].ne {
+				addq.w	#1,d2
+				lsr.w	#1,d0
+			}
+			move.w	d2,DPBTable_Sft(a3)
+
+			rts
+
+
+		  ?_GetIPLSec_X68::
+			* Human68kパーティションであることを確認
+			lea	16(a2),a2
+			cmpi.l	#'Huma',0(a2)
+			bne	?_GetIPLSec_Unready
+			cmpi.l	#'n68k',4(a2)
+			bne	?_GetIPLSec_Unready
+
+			* Activeチェック
+			move.b	8(a2),d0
+			btst	#0,d0
+			bst	?_GetIPLSec_Unready
+
+			* IPLセクタを読み込む
+			lea	IPLSecReadBuf,a1
+			move.l	8(a2),d2
+			andi.l	#$ffffff,d2
+			move.b	(SCSI_BlockCapacity),d0
+			lsl.l	#2,d2
+			lsr.l	d0,d2
+			move.l	d2,DPBTable_BaseSec(a3)
+			moveq.l	#1,d3
+			moveq.l	#0,d5
+			move.b	(SCSI_BlockCapacity),d5
+			bsr	SCSI_S_READ
+			tst.l	d0
+			bne	?_GetIPLSec_Unready
+
+			* DPB情報作成その１（XIPLからコピー）
+			move.w	XIPL_SecByte(a1),d0
+			beq	?_GetIPLSec_Unready
+			tst.b	d0
+			bne	?_GetIPLSec_Unready
+			cmp.w	(HUWK_BuffersSize),d0
+			bhi	?_GetIPLSec_Unready
+			move.w	d0,XDPB_SecByte(a4)
+			move.w	XIPL_FATSec(a1),XDPB_FATSec(a4)
+			move.b	XIPL_FATNum(a1),XDPB_FATNum(a4)
+			beq	?_GetIPLSec_Unready
+			move.w	XIPL_RootEntryNum(a1),XDPB_RootEntryNum(a4)
+			beq	?_GetIPLSec_Unready
+			move.b	XIPL_MediaID(a1),XDPB_MediaID(a4)
+			move.b	XIPL_FATSize(a1),XDPB_FATSize(a4)
+			beq	?_GetIPLSec_Unready
+			move.b	XIPL_CluSec(a1),d0
+			subq.b	#1,d0
+			move.b	d0,XDPB_CluSec(a4)
+			tst.b	(SCSI_RemovableFlag)
+			@ifst	{
+				move.b	#$f6,XDPB_MediaID(a4)
+			} @else {
+				move.b	#$f7,XDPB_MediaID(a4)
+			}
+
+			* DPB情報作成その２（XDPBから計算が必要なもの）
+			bsr	?_GetIPLSec_Sub2
+
+			* DPB情報作成その３（XIPLから計算が必要なもの）
+			moveq.l	#0,d0
+			move.w	XIPL_MaxSecW(a1),d0
+			@ifeq	{
+				move.l	XIPL_MaxSecL(a1),d0
+			}
+			moveq.l	#0,d1
+			move.w	XDPB_DataSec(a4),d1
+			sub.l	d1,d0
+			move.b	XDPB_SftCluSec(a4),d1
+			andi.b	#$7f,d1
+			lsr.l	d1,d0
+			addq.w	#3,d0
+			move.w	d0,XDPB_CluNum(a4)
+
+			moveq.l	#0,d0
+			rts
+
+		  ?_GetIPLSec_MSDOS::
+			* DPB情報作成その１
+			move.b	$0c(a1),d0
+			rol.w	#8,d0
+			move.b	$0b(a1),d0
+			tst.w	d0
+			beq	?_GetIPLSec_Unready
+			tst.b	d0
+			bne	?_GetIPLSec_Unready
+			cmp.w	(HUWK_BuffersSize),d0
+			bhi	?_GetIPLSec_Unready
+			move.w	d0,XDPB_SecByte(a4)
+			move.b	$0f(a1),d0
+			rol.w	#8,d0
+			move.b	$0e(a1),d0
+			move.w	d0,XDPB_FATSec(a4)
+			move.b	$10(a1),XDPB_FATNum(a4)
+			beq	?_GetIPLSec_Unready
+			move.b	$12(a1),d0
+			rol.w	#8,d0
+			move.b	$11(a1),d0
+			move.w	d0,XDPB_RootEntryNum(a4)
+			beq	?_GetIPLSec_Unready
+			move.b	$15(a1),XDPB_MediaID(a4)
+			move.b	$16(a1),XDPB_FATSize(a4)
+			beq	?_GetIPLSec_Unready
+			move.b	$0d(a1),d0
+			subq.b	#1,d0
+			move.b	d0,XDPB_CluSec(a4)
+			tst.b	(SCSI_RemovableFlag)
+			@ifst	{
+				move.b	#$f6,XDPB_MediaID(a4)
+			} @else {
+				move.b	#$f7,XDPB_MediaID(a4)
+			}
+
+			* DPB情報作成その２（XDPBから計算が必要なもの）
+			bsr	?_GetIPLSec_Sub2
+			ori.b	#$80,XDPB_SftCluSec(a4)	* インテルFAT指定
+
+			* DPB情報作成その３（XIPLから計算が必要なもの）
+			moveq.l	#0,d0
+			move.b	$14(a1),d0
+			rol.w	#8,d0
+			move.b	$13(a1),d0
+			tst.w	d0
+			@ifeq	{
+				move.b	$23(a1),d0
+				rol.l	#8,d0
+				move.b	$22(a1),d0
+				rol.l	#8,d0
+				move.b	$21(a1),d0
+				rol.l	#8,d0
+				move.b	$20(a1),d0
+			}
+			moveq.l	#0,d1
+			move.w	XDPB_DataSec(a4),d1
+			sub.l	d1,d0
+			move.b	XDPB_SftCluSec(a4),d1
+			andi.b	#$7f,d1
+			lsr.l	d1,d0
+			addq.w	#3,d0
+			move.w	d0,XDPB_CluNum(a4)
+
+			moveq.l	#0,d0
+			rts
+
+		  ?_GetIPLSec_PC98::
+			* MS-DOSパーティションであることを確認
+			lea	32(a2),a2
+ .if 0
+			cmpi.l	#'MS-D',-32+$10(a2)
+			bne	?_GetIPLSec_Unready
+			cmpi.w	#'OS',-32+$14(a2)
+			bne	?_GetIPLSec_Unready
+ .endif
+			move.b	-32+$00(a2),d0
+			btst	#5,d0
+			bcl	?_GetIPLSec_Unready
+
+			* Activeチェック
+			move.b	-32+$01(a2),d0
+			btst	#7,d0
+			bcl	?_GetIPLSec_Unready
+
+			* IPLセクタを読み込む
+		  ?_GetIPLSec_PC98_Retry::
+			move.l	(PC98GetIPLRetryCount),d0
+			@switch [ d0 ].b {
+			  @case	#0:
+				moveq.l	#0,d0
+				move.w	(SCSI_CylinderSize),d0
+				@break;
+			  @case	#1:
+				moveq.l	#0,d0
+				move.w	(SCSI_CylinderSize2),d0
+				@break;
+			  @case	#2:
+				move.l	(SpOption_98C),d0
+				@break;
+			  @case	#3:
+				bsr	?_SearchPC98IPL
+				@break;
+			  @case	#4:
+				bra	?_GetIPLSec_Unready
+			}
+			tst.l	d0
+			@ifeq	{
+				addq.l	#1,(PC98GetIPLRetryCount)
+				bra	?_GetIPLSec_PC98_Retry
+			}
+			lea	IPLSecReadBuf,a1
+			move.b	-32+$0b(a2),d2
+			rol.w	#8,d2
+			move.b	-32+$0a(a2),d2
+			mulu	d0,d2
+			move.l	d2,DPBTable_BaseSec(a3)
+			moveq.l	#1,d3
+			moveq.l	#0,d5
+			move.b	(SCSI_BlockCapacity),d5
+			bsr	SCSI_S_READ
+			tst.l	d0
+			bne	?_GetIPLSec_Unready
+			cmpi.b	#$eb,(a1)
+			@ifne	{
+				addq.l	#1,(PC98GetIPLRetryCount)
+				bra	?_GetIPLSec_PC98_Retry
+			}
+			bra	?_GetIPLSec_MSDOS
+
+		  ?_GetIPLSec_TOWNS::
+			* MS-DOSパーティションであることを確認
+			lea	48(a2),a2
+			cmpi.l	#'MS-D',-16+$10(a2)
+			bne	?_GetIPLSec_Unready
+			cmpi.w	#'OS',-16+$14(a2)
+			bne	?_GetIPLSec_Unready
+
+			* Activeチェック
+			move.b	-16+$01(a2),d0
+			bcl	?_GetIPLSec_Unready
+
+			* IPLセクタを読み込む
+			lea	IPLSecReadBuf,a1
+			move.b	-16+$05(a2),d2
+			rol.l	#8,d2
+			move.b	-16+$04(a2),d2
+			rol.l	#8,d2
+			move.b	-16+$03(a2),d2
+			rol.l	#8,d2
+			move.b	-16+$02(a2),d2
+			move.l	d2,DPBTable_BaseSec(a3)
+			moveq.l	#1,d3
+			moveq.l	#0,d5
+			move.b	(SCSI_BlockCapacity),d5
+			bsr	SCSI_S_READ
+			tst.l	d0
+			bne	?_GetIPLSec_Unready
+			cmpi.l	#'IPL4',0(a1)
+			bne	?_GetIPLSec_Unready
+			bra	?_GetIPLSec_MSDOS
+
+
+		  ?_GetIPLSec_IBM::
+			* IBMは１パーティションのみ
+			cmpi.w	#MAXDPB-1,d7
+			bne	?_GetIPLSec_Unready
+
+			* Activeチェック
+
+			* IPLセクタを読み込む
+			lea	IPLSecReadBuf,a1
+			moveq.l	#0,d2
+			move.l	d2,DPBTable_BaseSec(a3)
+			moveq.l	#1,d3
+			moveq.l	#0,d5
+			move.b	(SCSI_BlockCapacity),d5
+			bsr	SCSI_S_READ
+			tst.l	d0
+			bne	?_GetIPLSec_Unready
+			bsr	?_GetIPLSec_MSDOS
+									*---------- TNB
+								* IBM FORMAT でも、FD の場合
+								* やはりメディアタイプを変え
+								* たいのでここで判断していま
+								* す。ただ、サイズだけでチェッ
+								* クしているのでこの大きさの
+								* MO があったら・・・。でも
+								* 他にいい方法が見つからな
+								* いので、こうしてます。
+								* _SftCluSec を andi.b して
+								* いるのは頭 bit が立ってい
+								* ると DISKCOPY で違うメディ
+								* アとなりコピー出来ないから
+								* です。デバドラ内では問題無
+								* いでしょうか？　実際これで
+								* 今いろいろしていますが、問
+								* 題は出てませんが。。。
+			move.l	(SCSI_TotalBlock),d0
+			cmpi.l	#$0B40-1,d0
+			bne	@f
+			*--- 2HD(144)
+			move.b	#$FA,XDPB_MediaID(a4)
+			andi.b	#$7F,XDPB_SftCluSec(a4)		* 0 にする
+			moveq	#0,d0
+			rts
+		@@:
+			cmpi.l	#$05a0-1,d0
+			bne	@f
+			*--- 2DD
+			move.b	#$FC,XDPB_MediaID(a4)
+			andi.b	#$7F,XDPB_SftCluSec(a4)		* 0 にする
+			moveq	#0,d0
+			rts
+		@@:
+			cmpi.l	#$0960-1,d0
+			bne	@f
+			*--- 2HC
+			move.b	#$FD,XDPB_MediaID(a4)
+			andi.b	#$7F,XDPB_SftCluSec(a4)		* 0 にする
+		@@:
+			moveq	#0,d0
+			rts
+									*---------- TNB
+
+
+		  ?_GetIPLSec_IBMFDISK::
+			cmpi.l	#-1,(IBMFDISKPartSec)
+			beq	?_GetIPLSec_Unready
+
+			* MS-DOSパーティションであることを確認
+			lea	$1c2(a2),a0
+			moveq.l	#0,d0
+			tst.b	(IBMFDISKExPartFlag)
+			@ifcl	{
+				moveq.l	#MAXDPB-1,d0
+				sub.w	d7,d0
+				mulu	#$10,d0
+			}
+			tst.b	(a0,d0.w)
+			bmi	?_GetIPLSec_Unready
+
+			* Activeチェック
+		.if 0 * 判定方法不明
+			move.b	-16+$c0(a2),d0
+			btst	#0,d0
+			bcl	?_GetIPLSec_Unready
+		.endif
+
+			* IPLセクタを読み込む
+			lea	IPLSecReadBuf,a1
+			lea	$1c6(a2),a0
+			tst.b	(IBMFDISKExPartFlag)
+			@ifcl	{
+				moveq.l	#MAXDPB-1,d0
+				sub.w	d7,d0
+				mulu	#$10,d0
+			}
+			move.b	3(a0,d0.w),d2
+			rol.l	#8,d2
+			move.b	2(a0,d0.w),d2
+			rol.l	#8,d2
+			move.b	1(a0,d0.w),d2
+			rol.l	#8,d2
+			move.b	0(a0,d0.w),d2
+			add.l	(IBMFDISKPartSec),d2
+			tst.l	d2
+			@ifeq	{
+				move.l	#-1,(IBMFDISKPartSec)
+				bra	?_GetIPLSec_Unready
+			}
+			move.l	d2,DPBTable_BaseSec(a3)
+			moveq.l	#1,d3
+			moveq.l	#0,d5
+			move.b	(SCSI_BlockCapacity),d5
+			@ifeq	{
+				add.l	d3,d3
+			}
+			bsr	SCSI_S_READ
+			tst.l	d0
+			bne	?_GetIPLSec_Unready
+
+			* パーティションがLinux形式かどうかを調べる
+			cmpi.w	#MAXDPB-1,d7
+			@ifeq	{
+				cmpi.b	#$05,$1d2(a2)
+				@ifeq	{
+					st.b	(IBMFDISKExPartFlag)
+				}
+			}
+			lea	$1c2(a2),a0
+			tst.b	(IBMFDISKExPartFlag)
+			@ifcl	{
+				moveq.l	#MAXDPB-1,d0
+				sub.w	d7,d0
+				mulu	#$10,d0
+			}
+			tst.b	(a0,d0.w)
+			bmi	?_GetIPLSec_Unready
+
+			* 次のパーティションリンク情報を読む
+			move.b	$1d9(a2),d0
+			rol.l	#8,d0
+			move.b	$1d8(a2),d0
+			rol.l	#8,d0
+			move.b	$1d7(a2),d0
+			rol.l	#8,d0
+			move.b	$1d6(a2),d0
+			tst.l	d0
+			@ifeq	{
+				move.l	#-1,(IBMFDISKPartSec)
+			} @else {
+				lea	PartitionSecReadBuf,a1
+				move.b	$1c9(a2),d0
+				rol.l	#8,d0
+				move.b	$1c8(a2),d0
+				rol.l	#8,d0
+				move.b	$1c7(a2),d0
+				rol.l	#8,d0
+				move.b	$1c6(a2),d0
+				move.b	$1cd(a2),d2
+				rol.l	#8,d2
+				move.b	$1cc(a2),d2
+				rol.l	#8,d2
+				move.b	$1cb(a2),d2
+				rol.l	#8,d2
+				move.b	$1ca(a2),d2
+				add.l	d0,d2
+				add.l	(IBMFDISKPartSec),d2
+				move.l	d2,(IBMFDISKPartSec)
+				moveq.l	#1,d3
+				moveq.l	#0,d5
+				move.b	(SCSI_BlockCapacity),d5
+				@ifeq	{
+					add.l	d3,d3
+				}
+				bsr	SCSI_S_READ
+				tst.l	d0
+				@ifne	{
+					move.l	#-1,(IBMFDISKPartSec)
+				}
+				moveq.l	#0,d0
+			}
+
+			lea	IPLSecReadBuf,a1
+			cmpi.b	#$eb,(a1)
+			bne	?_GetIPLSec_Unready
+			bra	?_GetIPLSec_MSDOS
+
+		  ?_SearchPC98IPL::
+			movem.l	d1-d7/a0-a5,-(sp)
+
+			move.l	(SoftVerifyBufSize),d0
+			divu	(SCSI_BlockCapacityByte),d0
+			andi.l	#$ff,d0
+			move.w	d0,a5
+			move.l	#$1000,d1
+			divu	d0,d1
+			move.w	d1,a4
+
+			moveq.l	#1,d7
+			@do {
+				lea	SoftVerifyBuf,a1
+				move.w	a5,d2
+				mulu	d7,d2
+				add.w	#$10,d2
+				move.w	a5,d3
+				moveq.l	#0,d5
+				move.b	(SCSI_BlockCapacity),d5
+				bsr	SCSI_S_READ
+				tst.l	d0
+				bne	?_SearchPC98IPL_NotFound
+				moveq.l	#0,d6
+				@do {
+					cmpi.b	#$eb,(a1)
+					beq	?_SearchPC98IPL_Found
+					adda.w	(SCSI_BlockCapacityByte),a1
+				} @while [ addq.w #1,d6; cmp.w a5,d6 ].cs;
+			} @while [ addq.w #1,d7; cmp.w a4,d7 ].cs;
+		  ?_SearchPC98IPL_NotFound::
+			moveq.l	#0,d0
+			bra	?_SearchPC98IPL_e
+		  ?_SearchPC98IPL_Found::
+			move.w	a5,d0
+			mulu	d7,d0
+			add.w	#$10,d0
+			add.l	d6,d0
+		  ?_SearchPC98IPL_e::
+			movem.l	(sp)+,d1-d7/a0-a5
+			rts
+
+
+		  ?_GetIPLSec_ZIP::
+			* MS-DOSパーティションであることを確認
+		.if 0 * 判定方法不明
+			lea	48(a2),a2
+			cmpi.l	#'MS-D',-16+$10(a2)
+			bne	?_GetIPLSec_Unready
+			cmpi.w	#'OS',-16+$14(a2)
+			bne	?_GetIPLSec_Unready
+		.endif
+
+			* Activeチェック
+		.if 0 * 判定方法不明
+			move.b	-16+$01(a2),d0
+			bcl	?_GetIPLSec_Unready
+		.endif
+
+			* IPLセクタを読み込む
+			lea	IPLSecReadBuf,a1
+			move.b	$1f9(a2),d2
+			rol.l	#8,d2
+			move.b	$1f8(a2),d2
+			rol.l	#8,d2
+			move.b	$1f7(a2),d2
+			rol.l	#8,d2
+			move.b	$1f6(a2),d2
+			move.l	d2,DPBTable_BaseSec(a3)
+			moveq.l	#1,d3
+			moveq.l	#0,d5
+			move.b	(SCSI_BlockCapacity),d5
+			bsr	SCSI_S_READ
+			tst.l	d0
+			bne	?_GetIPLSec_Unready
+			cmpi.b	#$eb,(a1)
+			bne	?_GetIPLSec_Unready
+			bra	?_GetIPLSec_MSDOS
+
+									*---------- TNB
+		  ?_GetIPLSec_2HD::
+			* 2HDは１パーティションのみ
+			cmpi.w	#MAXDPB-1,d7
+			bne	?_GetIPLSec_Unready
+
+			* Activeチェック
+
+			* IPLセクタを読み込む(ダミー読み込み)
+			lea	IPLSecReadBuf,a1
+			moveq.l	#0,d2
+			move.l	d2,DPBTable_BaseSec(a3)
+			moveq.l	#1,d3
+			moveq.l	#0,d5
+			move.b	(SCSI_BlockCapacity),d5
+			bsr	SCSI_S_READ
+			tst.l	d0
+			bne	?_GetIPLSec_Unready
+
+			* DPB情報作成その１
+			move.w	#$0400,XDPB_SecByte(a4)		*** 固定値
+			move.w	#$0001,XDPB_FATSec(a4)		***
+			move.b	#$02,XDPB_FATNum(a4)		***
+			move.w	#$00C0,XDPB_RootEntryNum(a4)	***
+			move.b	#$FE,XDPB_MediaID(a4)		***
+			move.b	#$02,XDPB_FATSize(a4)		***
+			move.b	#1-1,XDPB_CluSec(a4)		***
+
+			* DPB情報作成その２（XDPBから計算が必要なもの）
+			bsr	?_GetIPLSec_Sub2
+
+			* DPB情報作成その３（XIPLから計算が必要なもの）
+			move.l	#$04D0,d0			*** 固定値
+			moveq.l	#0,d1
+			move.w	XDPB_DataSec(a4),d1		***
+			sub.l	d1,d0
+			move.b	XDPB_SftCluSec(a4),d1		***
+			andi.b	#$7f,d1
+			lsr.l	d1,d0
+			addq.w	#3,d0
+			move.w	d0,XDPB_CluNum(a4)		***
+
+			moveq	#0,d0
+			rts
+									*---------- TNB
+
+
+		}
+
+
+*************************************************************************
+
+
+*	void	InitDPB( void );
+*
+*		DPBを初期化する。
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ InitDPB ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			* DPB情報バックアップ
+			lea	DPBTable,a1
+			lea	DPBBuf,a2
+			@repeat [ d6, #MAXDPB-1 ].w {
+				move.l	XDPB_NextXDPBPtr(a2),DPBTable_NextXDPBPtr(a1)
+				move.b	XDPB_DriveNo(a2),DPBTable_DriveNo(a1)
+				lea	SizeOf1DPBTable(a1),a1
+				lea	SizeOfXDPB(a2),a2
+			}
+
+			* DPB情報初期化
+			lea	DPBTable,a1
+			@repeat [ d6, #MAXDPB-1 ].w {
+				clr.l	DPBTable_XDPBPtr(a1)
+				clr.l	DPBTable_BaseSec(a1)
+				clr.w	DPBTable_Sft(a1)
+				lea	SizeOf1DPBTable(a1),a1
+			}
+			lea	DPBBuf,a1
+			lea	__SUSIEDEVH,a2
+			moveq.l	#0,d1
+			@repeat [ d6, #MAXDPB-1 ].w {
+				move.l	a1,a0
+				@repeat [ d7, #SizeOfXDPB-1 ].w {
+					clr.b	(a0)+
+				}
+				* ダミー情報
+				move.w	(SDDMode),d0
+				@switch [ d0 ].w {
+				  @case #1:
+					move.b	d1,XDPB_UnitNo(a1)
+					move.l	a2,XDPB_DEVHPtr(a1)
+					move.w	#0,XDPB_SecByte(a1)
+					move.w	#0,XDPB_FATSec(a1)
+					move.b	#1,XDPB_FATNum(a1)
+					move.b	#$01,XDPB_FATSize(a1)
+					move.w	#$0008,XDPB_RootEntryNum(a1)
+					move.w	#$0003,XDPB_DataSec(a1)
+					move.w	#$0003,XDPB_CluNum(a1)
+					move.w	#$0002,XDPB_RootSec(a1)
+					move.b	#$f5,XDPB_MediaID(a1)
+					move.b	#$0b,XDPB_SftSecByte(a1)
+					@break;
+				  @default:
+					move.b	d1,XDPB_UnitNo(a1)
+					move.l	a2,XDPB_DEVHPtr(a1)
+					move.w	#$400,XDPB_SecByte(a1)
+					move.w	#1,XDPB_FATSec(a1)
+					move.b	#1,XDPB_FATNum(a1)
+					move.b	#$01,XDPB_FATSize(a1)
+					move.w	#$0008,XDPB_RootEntryNum(a1)
+					move.w	#$0003,XDPB_DataSec(a1)
+					move.w	#$0003,XDPB_CluNum(a1)
+					move.w	#$0002,XDPB_RootSec(a1)
+					tst.b	(SCSI_RemovableFlag)
+					@ifst	{
+						move.b	#$f6,XDPB_MediaID(a1)
+					} @else {
+						move.b	#$f7,XDPB_MediaID(a1)
+					}
+					move.b	#$0a,XDPB_SftSecByte(a1)
+					@break;
+				}
+
+				lea	SizeOfXDPB(a1),a1
+				addq.w	#1,d1
+			}
+			lea	DPBTable,a1
+			lea	DPBBuf,a2
+			@repeat [ d6, #MAXDPB-1 ].w {
+				move.l	DPBTable_NextXDPBPtr(a1),XDPB_NextXDPBPtr(a2)
+				move.b	DPBTable_DriveNo(a1),XDPB_DriveNo(a2)
+				lea	SizeOf1DPBTable(a1),a1
+				lea	SizeOfXDPB(a2),a2
+			}
+
+		  ?_e::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	SetSpecialOptionSDD( void );
+*
+*		特殊オプションを設定する。
+*		in	a1	特殊スイッチ
+*		out	なし
+
+
+		@xproc	[ SetSpecialOptionSDD ] {
+			@param	[ a1, SpOption ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			* 特殊スイッチ登録
+			@do {
+				move.l	(SpOption)+,d0
+				@break.eq;
+				@switch [ d0 ].l {
+				  @case	#'SID:':
+					move.l	(SpOption),d0
+					move.l	d0,(SCSI_ID)
+					@break;
+				  @case	#'98:C':
+					move.l	(SpOption),(SpOption_98C)
+					@break;
+				  @case	#'EJE:':
+					moveq.l	#0,d0
+					tst.l	(SpOption)
+					@ifne	{
+						moveq.l	#1,d0
+					}
+					move.b	d0,(ForceEjectFlag)
+					@break;
+				  @case	#'WPR:':
+					moveq.l	#0,d0
+					tst.l	(SpOption)
+					@ifne	{
+						moveq.l	#1,d0
+					}
+					move.b	d0,(ForceProtectFlag)
+					@break;
+				  @case	#'BSY:':
+					moveq.l	#0,d0
+					tst.l	(SpOption)
+					@ifne	{
+						moveq.l	#1,d0
+					}
+					move.b	d0,(SCSI_WaitBusyFlag)
+					@break;
+				  @case	#'HVF:':
+					move.l	(SpOption),d0
+					move.b	d0,(SCSI_VERIFYMode)
+					@break;
+				  @case	#'REZ:':
+					moveq.l	#0,d0
+					tst.l	(SpOption)
+					@ifne	{
+						moveq.l	#1,d0
+					}
+					move.b	d0,(SCSI_NoREZEROUNITFlag)
+					@break;
+				  @case	#'RWE:':
+					moveq.l	#0,d0
+					tst.l	(SpOption)
+					@ifne	{
+						moveq.l	#1,d0
+					}
+					move.b	d0,(SCSI_TestRWEXTFlag)
+					@break;
+				  @case	#'TEJ:':
+					move.l	(SpOption),(SpOption_TEJ)
+					@break;
+				  @case	#'TWA:':
+					move.l	(SpOption),(SpOption_TWA)
+					@break;
+				  @case	#'TIN:':
+					move.l	(SpOption),(SpOption_TIN)
+					@break;
+				  @case	#'BRS:':
+					moveq.l	#0,d0
+					tst.l	(SpOption)
+					@ifne	{
+						moveq.l	#1,d0
+					}
+					move.b	d0,(BrowseResourceFlag)
+					@break;
+				  @case	#'PAA:':
+					moveq.l	#0,d0
+					tst.l	(SpOption)
+					@ifne	{
+						moveq.l	#1,d0
+					}
+					move.b	d0,(ReqSendPlayAudioAdrFlag)
+					@break;
+				}
+				addq.l	#4,SpOption
+			} @while.t;
+
+		  ?_e::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	GetSpecialOptionSDD( void );
+*
+*		特殊オプションを読み出す。
+*		in	a1	特殊スイッチを納めるバッファ
+*		out	なし
+
+
+		@xproc	[ GetSpecialOptionSDD ] {
+			@param	[ a1, SpOption ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			* 特殊スイッチ読み出し
+			* SID:
+			move.l	#'SID:',(SpOption)+
+			move.l	(SCSI_ID),d0
+			move.l	d0,(SpOption)+
+
+			* 98:C
+			move.l	#'98:C',(SpOption)+
+			move.l	(SpOption_98C),(SpOption)+
+
+			* EJE:
+			move.l	#'EJE:',(SpOption)+
+			moveq.l	#0,d0
+			move.b	(ForceEjectFlag),d0
+			move.l	d0,(SpOption)+
+
+			* WPR:
+			move.l	#'WPR:',(SpOption)+
+			moveq.l	#0,d0
+			move.b	(ForceProtectFlag),d0
+			move.l	d0,(SpOption)+
+
+			* BSY:
+			move.l	#'BSY:',(SpOption)+
+			moveq.l	#0,d0
+			move.b	(SCSI_WaitBusyFlag),d0
+			move.l	d0,(SpOption)+
+
+			* HVF:
+			move.l	#'HVF:',(SpOption)+
+			moveq.l	#0,d0
+			move.b	(SCSI_VERIFYMode),d0
+			move.l	d0,(SpOption)+
+
+			* REZ:
+			move.l	#'REZ:',(SpOption)+
+			moveq.l	#0,d0
+			move.b	(SCSI_NoREZEROUNITFlag),d0
+			move.l	d0,(SpOption)+
+
+			* WRE:
+			move.l	#'WRE:',(SpOption)+
+			moveq.l	#0,d0
+			move.b	(SCSI_TestRWEXTFlag),d0
+			move.l	d0,(SpOption)+
+
+			* TEJ:
+			move.l	#'TEJ:',(SpOption)+
+			moveq.l	#0,d0
+			move.l	(SpOption_TEJ),(SpOption)+
+
+			* TWA:
+			move.l	#'TWA:',(SpOption)+
+			moveq.l	#0,d0
+			move.l	(SpOption_TWA),(SpOption)+
+
+			* TIN:
+			move.l	#'TIN:',(SpOption)+
+			moveq.l	#0,d0
+			move.l	(SpOption_TIN),(SpOption)+
+
+			* BRS:
+			move.l	#'BRS:',(SpOption)+
+			moveq.l	#0,d0
+			move.b	(BrowseResourceFlag),d0
+			move.l	d0,(SpOption)+
+
+			* PAA:
+			move.l	#'PAA:',(SpOption)+
+			moveq.l	#0,d0
+			move.b	(ReqSendPlayAudioAdrFlag),d0
+			move.l	d0,(SpOption)+
+
+			clr.l	(SpOption)+
+
+		  ?_e::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	InstallSDD( void );
+*
+*		SDDをインストールする。
+*		in	d1	SCSI ID
+*			d2	最大登録DPB数（＝ドライブ数）
+*			d3	登録用スイッチ
+*				b0	S_VERIFYを使用するなら1
+*				b1	EXTコマンドを使用するなら1
+*				b2	BusyでWait/Retryするなら1
+*				b3	b0と組み合わせてベリファイモードとして使用
+*			a1	ドライブ名文字列（"A"～"Z",$00で終了）
+*		out	d0	エラーなら負で帰る。
+
+
+		@xproc	[ InstallSDD ] {
+			@param	[ d1, IDNo ].l;
+			@param	[ d2, DPBCnt ].l;
+			@param	[ d3, Switch ].l;
+			@param	[ a1, DriveName ].l;
+			@param	[ a2, SpOption ].l;
+
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			* 準備
+			move.l	IDNo,(SCSI_ID)
+			move.b	DPBCnt,(DPBMaxCount)
+			move.l	Switch,(InstallSwitch)
+			lea	DriveNameBuf,a0
+			StrCpy	(DriveName)+,(a0)+
+
+			* 準備その２
+			move.l	($1800+$30*4).w,a0
+			jsr	(a0)
+			move.w	d0,(HumanVersion)
+			move.w	#DEFCDROMCacheBufSize,d0
+			bsr	SetBufferSize
+
+			* スイッチ登録
+			moveq.l	#0,d1
+			move.l	(InstallSwitch),d0
+			btst.l	#0,d0
+			@ifst	{
+				bset	#0,d1
+			}
+			btst.l	#3,d0
+			@ifst	{
+				bset	#1,d1
+			}
+			move.b	d1,(SCSI_VERIFYMode)
+			btst.l	#1,d0
+			@ifst	{
+				move.b	#1,(SCSI_TestRWEXTFlag)
+			}
+			btst.l	#2,d0
+			sst.b	(SCSI_WaitBusyFlag)
+			@ifst	{
+				move.b	#1,(SCSI_WaitBusyFlag)
+			}
+
+			* ワーク初期化
+			lea	DPBTable,a1
+			@repeat [ d6, #MAXDPB-1 ].w {
+				move.l	#-1,DPBTable_NextXDPBPtr(a1)
+				move.b	#0,DPBTable_DriveNo(a1)
+				lea	SizeOf1DPBTable(a1),a1
+			}
+
+			* IOCSワークセット
+			move.l	(SCSI_ID),d0
+			move.b	($cec.w),d1
+			bset	d0,d1
+			move.b	d1,($cec.w)
+
+			* デバイスドライバ接続
+			lea	__SUSIEDEVH,a1
+			move.l	a1,-(sp)
+			tst.b	(DeviceInstalled)
+			@ifcl	{
+				jsr	__RegistDeviceDriver
+			} @else {
+				jsr	__RegistDeviceDriver2
+			}
+			addq.w	#4,sp
+
+			* DPB作成
+			st.b	(SCSI_RemovableFlag)
+			bsr	InitDPB
+			bsr	SCSI_S_SETFLAG
+			bsr	RemakeDPB
+
+			* ドライブを接続
+			lea	TmpDINFBuf,a0
+			lea	DriveNameBuf,a1
+			lea	DPBBuf,a2
+			lea	OldDINFBuf,a3
+			moveq.l	#0,d7
+			move.b	(DPBMaxCount),d7
+			subq.w	#1,d7
+			@repeat [ d7 ].w {
+				* 旧情報保存
+				moveq.l	#0,d0
+				move.b	(a1),d0
+				subi.b	#'A',d0
+				move.l	a3,-(sp)
+				move.l	d0,-(sp)
+				jsr	__UnregistDrive
+				addq.w	#8,sp
+				tst.l	d0
+				@ifmi	{
+					move.l	d0,DINF_PDriveNo(a3)
+				}
+
+				* 新情報登録
+				move.l	#__SUSIEDEVH,DINF_DEVHPtr(a0)
+				move.l	a2,DINF_XDPBPtr(a0)
+				move.l	a0,-(sp)
+				moveq.l	#0,d0
+				move.b	(a1),d0
+				subi.b	#'A',d0
+				move.l	d0,-(sp)
+				jsr	__RegistDrive
+				addq.w	#8,sp
+
+				* Next
+				lea	SizeOfXDPB(a2),a2
+				lea	SizeOfDINF(a3),a3
+			  ?_Next::
+				addq.w	#1,a1
+			}
+
+			* DPB情報バックアップ
+			lea	DPBTable,a1
+			lea	DPBBuf,a2
+			@repeat [ d6, #MAXDPB-1 ].w {
+				move.l	XDPB_NextXDPBPtr(a2),DPBTable_NextXDPBPtr(a1)
+				move.b	XDPB_DriveNo(a2),DPBTable_DriveNo(a1)
+				lea	SizeOf1DPBTable(a1),a1
+				lea	SizeOfXDPB(a2),a2
+			}
+			moveq.l	#0,d0
+
+		  ?_e::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		}
+
+
+*************************************************************************
+
+
+*	void	ReleaseSDD( void );
+*
+*		SDDを解除する。
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ ReleaseSDD ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			* デバイスドライバを切断
+			lea	__SUSIEDEVH,a1
+			move.l	a1,-(sp)
+			jsr	__UnregistDeviceDriver
+			addq.w	#4,sp
+
+			* ドライブを切断
+			lea	DPBBuf,a2
+			lea	OldDINFBuf,a3
+			moveq.l	#0,d7
+			move.b	(DPBMaxCount),d7
+			subq.w	#1,d7
+			@repeat [ d7 ].w {
+				* 新情報削除
+				pea	TmpDINFBuf
+				move.l	#$100,d0
+				move.b	XDPB_DriveNo(a2),d0
+				move.l	d0,-(sp)
+				jsr	__UnregistDrive
+				addq.w	#8,sp
+
+				* 旧情報復元
+				move.l	DINF_PDriveNo(a3),d0
+				@ifpl	{
+					move.l	a3,-(sp)
+					ori.l	#$100,d0
+					move.l	d0,-(sp)
+					jsr	__RegistDrive
+					addq.w	#8,sp
+				}
+
+				* Next
+				lea	SizeOfXDPB(a2),a2
+				lea	SizeOfDINF(a3),a3
+			}
+
+		  ?_e::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	int	AskReleaseSDD( void );
+*
+*		SDDが解除できるかどうかを調べる。
+*		in	なし
+*		out	d0	解除できれば０を返す
+*				できなければ-$ffffff00+原因となる物理ドライブ番号
+
+
+		@xproc	[ AskReleaseSDD ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			* ドライブを切断チェック
+			lea	DPBBuf,a2
+			moveq.l	#0,d7
+			move.b	(DPBMaxCount),d7
+			subq.w	#1,d7
+			@repeat [ d7 ].w {
+				* 検査
+				pea	TmpDINFBuf
+				move.l	#$100,d0
+				move.b	XDPB_DriveNo(a2),d0
+				move.l	d0,-(sp)
+				jsr	__AskDrive
+				addq.w	#8,sp
+				tst.l	d0
+				bmi	?_Err_Unreleasable
+
+				lea	TmpDINFBuf,a0
+				move.l	DINF_DEVHPtr(a0),a0
+				lea	__SUSIEDEVH,a1
+				cmpa.l	a0,a1
+				bne	?_Err_Unreleasable
+
+				lea	TmpDINFBuf,a0
+				move.l	DINF_XDPBPtr(a0),a0
+				cmpa.l	a0,a2
+				bne	?_Err_Unreleasable
+
+				* Next
+				lea	SizeOfXDPB(a2),a2
+			}
+
+			* DEVICE=の場合はその旨を返す
+			tst.b	(DeviceInstalled)
+			bst	?_FromConfigSys
+
+			moveq.l	#0,d0
+			bra	?_e
+
+		  ?_Err_Unreleasable::
+			moveq.l	#-1,d0
+			move.b	XDPB_DriveNo(a2),d0
+			bra	?_e
+
+		  ?_FromConfigSys::
+			moveq.l	#1,d0
+			bra	?_e
+
+		  ?_e::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	int	CalibrateSDD( void );
+*
+*		SDDをディスク挿入直後の状態にする。
+*		in	d1	!0でフラグの設定のみを行なう
+*		out	d0	ドライブ数+(SCSI ID*$100)+(LUN*$1000)+(FormatType*$10000)+(使用可能ドライブ数*$1000000)
+*			a1	DPBTableへのポインタ
+
+
+		@xproc	[ CalibrateSDD ] {
+			move.l	d1,-(sp)
+
+			bsr	SCSI_S_SETFLAG
+			clr.l	(LastAccessTime)
+			clr.l	(LastAccessDate)
+			tst.l	d1
+			bst	?_e
+
+			bsr	RemakeDPB
+			move.w	(FormatType),d0
+			@ifpl	{
+				rol.w	#8,d0
+				move.b	(DPBCount),d0
+				rol.w	#8,d0
+			}
+			swap	d0
+			move.l	(SCSI_ID),d1
+			lsl.w	#8,d1
+			lsl.w	#4,d1
+			lsr.l	#4,d1
+			move.w	d1,d0
+			move.b	(DPBMaxCount),d0
+			lea	DPBTable,a1
+
+		  ?_e::
+			st.b	(ReqRemakeDPB)
+			move.l	(sp)+,d1
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	int	AskSDD( void );
+*
+*		SDDの現在状況を調べる。
+*		in	なし
+*		out	d0	ドライブ数+(SCSI ID*$100)+(LUN*$1000)+(FormatType*$10000)+(使用可能ドライブ数*$1000000)
+*			a1	DPBTableへのポインタ
+
+
+		@xproc	[ AskSDD ] {
+			move.l	d1,-(sp)
+
+			move.w	(FormatType),d0
+			@ifpl	{
+				rol.w	#8,d0
+				move.b	(DPBCount),d0
+				rol.w	#8,d0
+			}
+			swap	d0
+			move.l	(SCSI_ID),d1
+			lsl.w	#8,d1
+			lsl.w	#4,d1
+			lsr.l	#4,d1
+			move.w	d1,d0
+			move.b	(DPBMaxCount),d0
+			lea	DPBTable,a1
+
+		  ?_e::
+			move.l	(sp)+,d1
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	int	AskSDDVersion( void );
+*
+*		SDDのバージョンを得る。
+*		in	なし
+*		out	d0	バージョン番号(1.23Aなら$0001_2341)
+
+
+		@xproc	[ AskSDDVersion ] {
+
+			move.l	#SUSIEVERH*$10000+SUSIEVERM*$1000+SUSIEVERL*$100+SUSIEVERR,d0
+
+		  ?_e::
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	int	SetForceEjectSDD( int flag );
+*
+*		強制Ejectフラグの設定をする。
+*		in	d1	1で強制Eject状態、0で強制Eject解除
+*				-1で現在の状態を得る
+*		out	d0	現在の状態
+
+
+		@xproc	[ SetForceEjectSDD ] {
+
+			move.b	(DisableUserEjectFlag),d0
+			or.b	(DisableOSEjectFlag),d0
+			@ifst	{
+				moveq.l	#-1,d1
+			}
+			moveq.l	#0,d0
+			move.b	(ForceEjectFlag),d0
+			tst.l	d1
+			@ifpl	{
+				move.b	d1,(ForceEjectFlag)
+				bsr	SCSI_S_SETFLAG
+				clr.l	(LastAccessTime)
+				clr.l	(LastAccessDate)
+				bsr	RemakeDPB
+			}
+
+		  ?_e::
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	int	SetForceProtectSDD( int flag );
+*
+*		強制Protectフラグの設定をする。
+*		in	d1	1で強制Protect状態、0で強制Protect解除
+*				-1で現在の状態を得る
+*		out	d0	現在の状態
+
+
+		@xproc	[ SetForceProtectSDD ] {
+
+			moveq.l	#0,d0
+			move.b	(ForceProtectFlag),d0
+			tst.l	d1
+			@ifpl	{
+				move.b	d1,(ForceProtectFlag)
+				bsr	SCSI_S_SETFLAG
+				clr.l	(LastAccessTime)
+				clr.l	(LastAccessDate)
+				bsr	RemakeDPB
+			}
+
+		  ?_e::
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	int	__DDD_INSTALL( void );
+*
+*		DEVICE=で起動した時のエントリポイント。
+*		in	デバイスドライバ起動方法の通り
+*		out	デバイスドライバ起動方法の通り
+
+
+		@xproc	[ __DDD_INSTALL ] {
+
+			tst.b	(DeviceInstalled)
+			@ifcl	{
+				jsr	DDD_INSTALL
+			} @else {
+				move.w	#$5003,d0
+			}
+
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	int	InstallSCSICALL( void );
+*
+*		SCSIコールをインストールする。
+*		in	なし
+*		out	d0	負でインストールできなかった
+
+
+		@xproc	[ InstallSCSICALL ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			* IOCSコールをチェック
+			cmpi.b	#$f5,($7d4.w)
+			bne	?_OK
+
+			* 外付けSCSIボードをチェック
+			lea	$ea0020,a1
+			bsr	?_PortCheck
+			tst.l	d0
+			bne	@f
+			cmpi.l	#'SCSI',$24(a1)
+			bne	@f
+			cmpi.w	#'EX',$28(a1)
+			beq	?_Install
+		  @@:
+
+			* 内蔵版をチェック
+			lea	$fc0000,a1
+			bsr	?_PortCheck
+			tst.l	d0
+			bne	@f
+			cmpi.l	#'SCSI',$24(a1)
+			bne	@f
+			cmpi.w	#'IN',$28(a1)
+			beq	?_Install
+		  @@:
+			bra	?_NG
+
+		  ?_PortCheck::
+			* バスエラーチェック
+			move.l	sp,a2
+			move.l	($0008.w),a3
+			move.l	#?_PortCheck_NG,($0008.w)
+			move.l	(a1),d0
+			btst.l	#0,d0
+			bst	?_PortCheck_NG
+			cmpi.l	#$200000,d0
+			bcs	?_PortCheck_NG
+			moveq.l	#0,d0
+		  ?_PortCheck_Quit::
+			move.l	a3,($0008.w)
+			move.l	a2,sp
+			rts
+
+		  ?_PortCheck_NG::
+			moveq.l	#-1,d0
+			bra	?_PortCheck_Quit
+
+		  ?_Install::
+			* ROMチェック
+			move.l	(a1),a1
+			cmpi.l	#'Huma',-8(a1)
+			bne	?_NG
+			cmpi.l	#'n68k',-4(a1)
+			bne	?_NG
+
+			* S-RAMチェック
+			cmpi.b	#'V',($ed006f)
+			@ifne	{
+				move.b	#$31,($e8e00d)
+				move.b	#'V',($ed006f)
+				move.w	#$0700,($ed0070)
+				cmpa.l	#$ea0020,a0
+				@ifeq	{
+					ori.w	#$0800,($ed0070)
+				}
+				move.b	#$00,($e8e00d)
+			}
+
+			* ベクタ設定
+			move.l	-$0c(a1),-(sp)
+			move.w	#$f5+$100,-(sp)
+			DOS	_INTVCS
+			addq.w	#6,sp
+
+			* OK
+			moveq.l	#0,d0
+			bra	?_Quit
+
+		  ?_OK::
+			moveq.l	#0,d0
+			bra	?_Quit
+
+		  ?_NG::
+			moveq.l	#-1,d0
+			bra	?_Quit
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*		32bit割り算 from GNULIB.a
+
+___divsi3::
+		move.l	$0004(sp),d1
+		move.l	d1,d0
+		swap.w	d0
+		or.w	$0008(sp),d0
+		bne	L000018
+		divu.w	$000a(sp),d1
+		moveq.l	#$00,d0
+		move.w	d1,d0
+		rts
+
+L000018:
+		move.l	d1,d0
+		bpl	L000030
+		neg.l	d0
+		move.l	$0008(sp),d1
+		beq	L000040
+		bpl	L00002a
+		neg.l	d1
+L000028:
+		bra	L000092
+L00002a:
+		bsr	L000092
+		neg.l	d0
+		rts
+
+L000030:
+		move.l	$0008(sp),d1
+		beq	L000040
+		bpl	L000028
+		neg.l	d1
+		bsr	L000092
+		neg.l	d0
+		rts
+
+L000040:
+		moveq.l	#$00,d0
+		rts
+
+L000044:
+		moveq.l	#$01,d0
+		rts
+
+L000048:
+		moveq.l	#$00,d1
+		divu.w	d1,d0
+		rts
+
+L00004e:
+		move.l	d0,d2
+		clr.w	d2
+		swap.w	d2
+		divu.w	d1,d2
+		movea.l	d2,a0
+		move.w	d0,d2
+		divu.w	d1,d2
+		move.w	a0,d0
+		swap.w	d0
+		move.w	d2,d0
+		rts
+
+L000064:
+		swap.w	d0
+		swap.w	d1
+		divu.w	d1,d0
+		and.l	#$0000ffff,d0
+		rts
+
+___udivsi3::
+		move.l	$0004(sp),d1
+		move.l	d1,d0
+		swap.w	d0
+		or.w	$0008(sp),d0
+		bne	L00008a
+		divu.w	$000a(sp),d1
+		moveq.l	#$00,d0
+		move.w	d1,d0
+		rts
+
+L00008a:
+		move.l	d1,d0
+		move.l	$0008(sp),d1
+		beq	L000040
+L000092:
+		cmp.l	d0,d1
+		beq	L000044
+		bhi	L000040
+		cmp.l	#$00010000,d1
+		bcs	L00004e
+		move.w	d0,d2
+		or.w	d1,d2
+		beq	L000064
+		movea.l	d0,a1
+		movea.l	d1,a2
+		cmp.l	#$01000000,d1
+		bcc	L0000c0
+		move.l	d1,d2
+		swap.w	d2
+		move.b	L0000f0(pc,d2.w),d2
+		lsr.l	d2,d1
+		lsr.l	d2,d0
+		bra	L0000d0
+L0000c0:
+		move.l	d1,d2
+		swap.w	d2
+		lsr.w	#8,d2
+		move.b	L0000f0(pc,d2.w),d2
+		addq.w	#8,d2
+		lsr.l	d2,d1
+		lsr.l	d2,d0
+L0000d0:
+		divu.w	d1,d0
+		and.l	#$0000ffff,d0
+		move.l	d0,d2
+		move.l	a2,d1
+		mulu.w	d1,d2
+		swap.w	d1
+		mulu.w	d0,d1
+		swap.w	d1
+		clr.w	d1
+		add.l	d1,d2
+		cmp.l	a1,d2
+		bls	L0000ee
+		subq.l	#1,d0
+L0000ee:
+		rts
+
+L0000f0:
+		.dc.b	$00,$01,$02,$02,$03,$03,$03,$03
+		.dc.b	$04,$04,$04,$04,$04,$04,$04,$04
+		.dc.b	$05,$05,$05,$05,$05,$05,$05,$05
+		.dc.b	$05,$05,$05,$05,$05,$05,$05,$05
+		.dc.b	$06,$06,$06,$06,$06,$06,$06,$06
+		.dc.b	$06,$06,$06,$06,$06,$06,$06,$06
+		.dc.b	$06,$06,$06,$06,$06,$06,$06,$06
+		.dc.b	$06,$06,$06,$06,$06,$06,$06,$06
+		.dc.b	$07,$07,$07,$07,$07,$07,$07,$07
+		.dc.b	$07,$07,$07,$07,$07,$07,$07,$07
+		.dc.b	$07,$07,$07,$07,$07,$07,$07,$07
+		.dc.b	$07,$07,$07,$07,$07,$07,$07,$07
+		.dc.b	$07,$07,$07,$07,$07,$07,$07,$07
+		.dc.b	$07,$07,$07,$07,$07,$07,$07,$07
+		.dc.b	$07,$07,$07,$07,$07,$07,$07,$07
+		.dc.b	$07,$07,$07,$07,$07,$07,$07,$07
+		.dc.b	$08,$08,$08,$08,$08,$08,$08,$08
+		.dc.b	$08,$08,$08,$08,$08,$08,$08,$08
+		.dc.b	$08,$08,$08,$08,$08,$08,$08,$08
+		.dc.b	$08,$08,$08,$08,$08,$08,$08,$08
+		.dc.b	$08,$08,$08,$08,$08,$08,$08,$08
+		.dc.b	$08,$08,$08,$08,$08,$08,$08,$08
+		.dc.b	$08,$08,$08,$08,$08,$08,$08,$08
+		.dc.b	$08,$08,$08,$08,$08,$08,$08,$08
+		.dc.b	$08,$08,$08,$08,$08,$08,$08,$08
+		.dc.b	$08,$08,$08,$08,$08,$08,$08,$08
+		.dc.b	$08,$08,$08,$08,$08,$08,$08,$08
+		.dc.b	$08,$08,$08,$08,$08,$08,$08,$08
+		.dc.b	$08,$08,$08,$08,$08,$08,$08,$08
+		.dc.b	$08,$08,$08,$08,$08,$08,$08,$08
+		.dc.b	$08,$08,$08,$08,$08,$08,$08,$08
+		.dc.b	$08,$08,$08,$08,$08,$08,$08,$08
+
+
+*************************************************************************
+
+
+SetBufferSize::
+		tst.l	(DivideAccessSize)
+		@ifeq	{
+			move.l	#$80,(DivideAccessSize)
+		}
+		move.w	d0,(CDROMCacheBufSize)
+		mulu	#SoftVerifyBufSecSize,d0
+		move.l	d0,(SoftVerifyBufSize)
+		sub.l	#DEFSoftVerifyBufSize,d0
+		move.l	d0,-(sp)
+		bsr	FlushCDROMCache
+		move.l	(sp)+,d0
+		rts
+
+
+*************************************************************************
+
+
+		.even
+		@STRSEC;
+		.even
+
+
+*************************************************************************
+
+
+

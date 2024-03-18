@@ -1,0 +1,151 @@
+*	Universal SCSI Engine Work Define
+*	Copyright (C)1994 GORRY.
+*	$Id: susie.mac,v 1.12 1996/12/24 12:40:13 GORRY Exp GORRY $
+
+
+*************************************************************************
+
+
+		.offset	0
+ＳSUB_MD:	ds.l	1
+ＳSUB_Name:	ds.b	128
+SizeOfＳSUB:
+		.text
+
+
+*************************************************************************
+
+
+		.offset	0
+		.even
+＠CmdDrv:		ds.b	32
+＠CmdDrvBack:		ds.b	32
+
+		.even
+＠KeepDEVHPtr:		ds.l	1
+＠DPBTablePtr:		ds.l	1
+＠XDPBPtr:		ds.l	1
+＠DOSERRVectorKeep:	ds.l	1
+＠CmdSCSI_ID:		ds.l	1
+＠SCSI_ID:		ds.l	1
+
+		.even
+＠CmdDrvCnt:		ds.w	1
+＠DrvCnt:		ds.w	1
+＠CmdDrvCntBack:	ds.w	1
+＠FormatType:		ds.w	1
+＠CmdSCSI_LUN:		ds.w	1
+
+		.even
+＠IsKeep:		ds.b	1
+＠ReqRelease:		ds.b	1
+＠ReqInstall:		ds.b	1
+＠ReqChangeStatus:	ds.b	1
+＠ReqPrintStatus:	ds.b	1
+＠ReqPrintHelp:		ds.b	1
+＠ReqUnkillDriver:	ds.b	1
+＠ReqForceKillDriver:	ds.b	1
+＠ReqForceEject0:	ds.b	1
+＠ReqForceEject1:	ds.b	1
+＠ReqForceProtect0:	ds.b	1
+＠ReqForceProtect1:	ds.b	1
+＠ReqWaitBusy0:		ds.b	1
+＠ReqWaitBusy1:		ds.b	1
+＠ReqHardVerify0:	ds.b	1
+＠ReqHardVerify1:	ds.b	1
+＠ReqHardVerify2:	ds.b	1
+＠ReqHardVerify3:	ds.b	1
+＠SlashFlag:		ds.b	1
+＠MediaID:		ds.b	1
+＠ReqTestRWEXT0:	ds.b	1
+＠ReqTestRWEXT1:	ds.b	1
+＠ReqAllowUnconnect0:	ds.b	1
+＠ReqAllowUnconnect1:	ds.b	1
+＠ReqBusReset:		ds.b	1
+＠ReqAllowRezeroUnit0:	ds.b	1
+＠ReqAllowRezeroUnit1:	ds.b	1
+＠ReqBrowseResource0:	ds.b	1
+＠ReqBrowseResource1:	ds.b	1
+＠ReadyTWOSCSI:		ds.b	1
+＠ReqSendPlayAudioAdr0:	ds.b	1
+＠ReqSendPlayAudioAdr1:	ds.b	1
+
+＠I_Option:		ds.b	1
+＠Z_Option:		ds.b	1
+＠SI_Option:		ds.b	1
+＠U_Option:		ds.b	1
+
+
+		.even
+＠Status_TI:		ds.l	1
+＠Status_TE:		ds.l	1
+＠Status_TW:		ds.l	1
+＠Status_V::		ds.b	1
+＠Status_E::		ds.b	1
+＠Status_W::		ds.b	1
+＠Status_B::		ds.b	1
+＠Status_H::		ds.b	1
+＠Status_RB::		ds.b	1
+
+
+		.even
+＠98C_Option:		ds.b	1
+＠TI_Option:		ds.b	1
+＠TE_Option:		ds.b	1
+＠TW_Option:		ds.b	1
+＠C_Option:		ds.b	1
+
+		.even
+＠98C_Param:		ds.l	1
+＠TI_Param:		ds.l	1
+＠TE_Param:		ds.l	1
+＠TW_Param:		ds.l	1
+＠C_Param:		ds.l	1
+
+
+		.even
+＠FILESNameBuf:		ds.b	128
+		.even
+＠FILESBuf:		ds.b	SizeOfＳFLS
+		.even
+＠NAMECKBuf:		ds.b	SizeOfＳNCK
+		.even
+＠SUBSTKeepBuf:		ds.b	26*SizeOfＳSUB
+
+		.even
+＠FreeDriveTable:	ds.b	26
+
+		.even
+＠DrvSCSIIDTable:	ds.l	26
+
+		.even
+＠DSKFREBuf:		ds.b	8
+		.even
+＠DINF:			ds.b	SizeOfDINF
+		.even
+＠TmpEnvBuf:		ds.b	256
+		.even
+＠ErrMesBuf:		ds.b	256
+		.even
+＠MesBuf:		ds.b	256
+		.even
+＠DDD_CmdLineBuf:	ds.b	256
+		.even
+＠SpOptionBuf:		ds.l	64
+		.even
+＠IOCTRLBuf:
+			ds.b	1024
+		.even
+＠SCSI_REQUESTBuf:
+＠SCSI_INQUIRYBuf:
+			ds.b	1024
+		.even
+
+
+SizeOfWork::
+		.text
+
+
+*************************************************************************
+
+

@@ -1,0 +1,68 @@
+*	SUSIE CALL Macro
+*	Copyright (C)1994 GORRY.
+*	$Id: sddcall.mac,v 1.6 1997/09/10 01:48:15 GORRY Exp GORRY $
+
+
+*************************************************************************
+
+
+SDDCALL	macro	callno,drv,buf
+	move.l	#SDDCALL_&callno,buf
+	pea	buf
+	move.w	#'SU',-(sp)
+	move.w	drv,-(sp)
+	move.w	#13,-(sp)
+	dc.w	$FF44	; DOS	_IOCTRL
+	lea	10(sp),sp
+	.endm
+
+
+*************************************************************************
+
+
+pr0	=	$00
+pr1	=	$04
+pr2	=	$08
+pr3	=	$0C
+pr4	=	$10
+pr5	=	$14
+pr6	=	$18
+pr7	=	$1C
+
+
+*************************************************************************
+
+
+SDDCALL_AskReleaseSDD		=	-2
+SDDCALL_ReleaseSDD		=	-1
+SDDCALL_AskSDD			=	0
+SDDCALL_CalibrateSDD		=	1
+SDDCALL_AskSDDVersion		=	2
+SDDCALL_SetForceEjectSDD	=	3
+SDDCALL_SetForceProtectSDD	=	4
+SDDCALL_SetSpecialOptionSDD	=	5
+SDDCALL_GetSpecialOptionSDD	=	6
+
+
+*************************************************************************
+
+
+SDD_FormatType_X68000	=	0
+SDD_FormatType_PC9801	=	1
+SDD_FormatType_FMTOWNS	=	2
+SDD_FormatType_IBMMO	=	3
+SDD_FormatType_IBMFDISK	=	4
+SDD_FormatType_ZIP	=	5
+SDD_FormatType_2HD	=	6
+SDD_FormatType_End1	=	6
+SDD_FormatType_ISO9660	=	16
+SDD_FormatType_End2	=	16
+SDD_FormatType_ERROR3	=	(-4)
+SDD_FormatType_Audio	=	(-3)
+SDD_FormatType_ERROR2	=	(-2)
+SDD_FormatType_ERROR	=	(-1)
+
+
+*************************************************************************
+
+

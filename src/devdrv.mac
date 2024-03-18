@@ -1,0 +1,207 @@
+*	Block Device Driver Utility
+*	Copyright (C)1994 GORRY.
+*	$Id: devdrv.mac,v 1.4 1995/05/21 14:46:34 GORRY Exp GORRY $
+
+
+						* HUWK : Human68kワーク
+HUWK_LastDEVHPtr	equ	$1c1c		* 最後のDEVへのポインタ
+HUWK_XDRVPtr		equ	$1c38		* XDRVへのポインタ
+HUWK_XDPBPtr		equ	$1c3c		* XDPBへのポインタ
+HUWK_FilesNum		equ	$1c6e		* FILES=の値+2
+HUWK_BuffersSize	equ	$1c70		* Buffersの値
+HUWK_LastDrive		equ	$1c73		* LastDriveの値(Z:=$19)
+HUWK_DriveNum		equ	$1c75		* 接続されている物理ドライブ数
+HUWK_XDNO		equ	$1c7e		* ドライブ番号テーブル(XDNO)
+
+
+						* DINF : デバイスドライバ情報
+	.offset	0
+DINF_PDriveNo:		ds.l	1	* 物理ドライブ番号
+DINF_DEVHPtr:		ds.l	1	* デバイスヘッダ(DEVH)へのポインタ
+DINF_XDPBPtr:		ds.l	1	* 内部DPB(XDPB)へのポインタ
+SizeOfDINF:
+	.text
+
+
+						* XDRV : ドライブワークテーブル
+						*	 ドライブ数の分だけ続く
+	.offset	0
+XDRV_Magic00:		ds.b	1	* 物理ドライブ番号(A:="A",B:="B"・・・)。
+XDRV_Magic01:		ds.b	1	* ":"（物理ドライブ番号マーク）
+XDRV_Magic02:		ds.b	1	* $09（ルートディレクトリマーク）
+XDRV_Path:		ds.b	61	* 現在のカレントパス、またはSubDrv・Dir先。\FOO\BARなら"FOO",$09,"BAR",$00。
+XDRV_Dummy40:		ds.l	1	* 不明
+XDRV_Dummy44:		ds.b	1	* 不明
+XDRV_DrvKind:		ds.b	1	* ドライブ種別。$00=未接続、$40=物理Drv、$50=SubDrv(DirをDrv化)、$60=SubDir(DrvをDir化)。
+XDRV_XDPBPtr:		ds.l	1	* 内部DPBテーブル(XDPB)へのポインタ
+XDRV_Magic4A:		ds.w	1	* $0000または$FFFFが書かれる
+XDRV_Magic4C:		ds.w	1	* 不明
+SizeOfXDRV:
+	.text
+
+
+						* XDNO : ドライブ番号テーブル
+						*	 ドライブ数の分だけ続く
+
+
+						* XDPB : 内部DPBテーブル
+	.offset	0
+XDPB_DriveNo:		ds.b	1	* 物理ドライブ番号(A:=0,B:=1・・・)
+XDPB_UnitNo:		ds.b	1	* 同一デバイス内でのユニット番号
+XDPB_DEVHPtr:		ds.l	1	* デバイスドライバ(DEVH)へのポインタ
+XDPB_NextXDPBPtr:	ds.l	1	* 次の内部DPBテーブル(XDPB)へのポインタ
+XDPB_SecByte:		ds.w	1	* １セクタのバイト数
+XDPB_CluSec:		ds.b	1	* １クラスタのセクタ数-1
+XDPB_SftCluSec:		ds.b	1	* クラスタ->セクタのシフトカウント
+XDPB_FATSec:		ds.w	1	* FATのセクタ位置
+XDPB_FATNum:		ds.b	1	* FATの個数
+XDPB_FATSize:		ds.b	1	* FATのセクタ数
+XDPB_RootEntryNum:	ds.w	1	* ルートディレクトリに記録できるエントリ数
+XDPB_DataSec:		ds.w	1	* データ領域のセクタ位置
+XDPB_CluNum:		ds.w	1	* データ部のクラスタ数+1
+XDPB_RootSec:		ds.w	1	* ルートディレクトリのセクタ位置
+XDPB_MediaID:		ds.b	1	* メディアID
+XDPB_SftSecByte:	ds.b	1	* セクタ->バイトのシフトカウント
+XDPB_FATSearchPos:	ds.w	1	* 次のFATサーチ位置
+XDPB_Magic1E:		ds.b	$1a	* 不明。合計$38byte
+SizeOfXDPB:
+	.text
+
+
+						* XIPL : IPLセクタに書かれたディスク情報
+	.offset	0
+XIPL_Magic00:		ds.w	1	* IPL用braコード
+XIPL_IPLName:		ds.b	8	* IPL名"SHARP/KG"
+XIPL_Magic0A:		ds.b	4	* 不明。$20202020
+XIPL_IPLVersion:	ds.b	4	* IPLバージョン"1.00"
+XIPL_SecByte:		ds.w	1	* １セクタのバイト数
+XIPL_CluSec:		ds.b	1	* １クラスタのセクタ数
+XIPL_FATNum:		ds.b	1	* FATの個数
+XIPL_FATSec:		ds.w	1	* FATのセクタ位置
+XIPL_RootEntryNum:	ds.w	1	* ルートディレクトリに記録できるエントリ数
+XIPL_MaxSecW:		ds.w	1	* 最大セクタ数
+XIPL_MediaID:		ds.b	1	* メディアID
+XIPL_FATSize:		ds.b	1	* FATのセクタサイズ
+XIPL_MaxSecL:		ds.w	1	* 最大セクタ数
+	.text
+
+
+						* DEVH : デバイスヘッダ
+	.offset	0
+DEVH_NextDEVHPtr:	ds.l	1	* 次のDEVHへのポインタ
+DEVH_Flag:		ds.w	1	* デバイスの属性
+DEVH_StrategyPtr:	ds.l	1	* ストラテジルーチンへのポインタ
+DEVH_InterruptPtr:	ds.l	1	* インタラプトルーチンへのポインタ
+DEVH_Name:		ds.b	8	* デバイス名
+SizeOfDEVH:
+	.text
+
+
+						* REQH : リクエストヘッダ
+	.offset	0
+REQH_Magic00:		ds.b	1	* 常に26
+REQH_UnitNo:		ds.b	1	* ユニット番号
+REQH_CommandCode:	ds.b	1	* コマンドコード
+REQH_ErrCodeL:		ds.b	1	* エラーコード下位
+REQH_ErrCodeH:		ds.b	1	* エラーコード上位
+REQH_Magic05:		ds.b	1	* 未使用
+REQH_Magic06:		ds.b	1	* 未使用
+REQH_Magic07:		ds.b	1	* 未使用
+REQH_Magic08:		ds.b	1	* 未使用
+REQH_Magic09:		ds.b	1	* 未使用
+REQH_Magic0A:		ds.b	1	* 未使用
+REQH_Magic0B:		ds.b	1	* 未使用
+REQH_Magic0C:		ds.b	1	* 未使用
+
+REQH_UnitNum:				* ユニット数
+REQH_InnerCmd:				* 内部コマンド
+REQH_DriveStatus:			* ドライブの状態
+REQH_MediaID:				* メディアバイト
+REQH_SearchAtr:				* 検索ファイル属性
+REQH_SeekMode:				* シークモード
+			ds.b	1
+REQH_DevDrvEndPtr:			* デバイスドライバ終了アドレス
+REQH_DataBufferPtr:			* データバッファへのポインタ
+REQH_BPBTablePtr:			* BPBテーブルへのポインタ
+REQH_ExchangeFlag:			* メディア交換フラグ
+REQH_OSFileNamePtr:			* OSファイル名へのポインタ
+			ds.l	1
+REQH_ParamPtr:				* パラメータへのポインタ
+REQH_ByteNum:				* バイト数
+REQH_SecNum:				* セクタ数
+REQH_AllocDriveNo:			* OSから割り当てのドライブ番号(A:=0,B:=1)
+REQH_BPBPtrPtr:				* BPBテーブルへのポインタへのポインタ
+REQH_SPIOCTRLCmd:			* 特殊IOCTRL内部コマンド
+REQH_DirListPtr:			* ディレクトリリストへのポインタ
+REQH_AccessSize:			* アクセスサイズ
+REQH_Result:				* 結果を返す
+			ds.l	1
+REQH_Sec:				* 開始セクタ番号
+REQH_FileInfoPtr:			* ファイル情報へのポインタ
+			ds.l	1
+SizeOfREQH:
+	.text
+
+
+						* XFCB : FCBの情報
+	.offset	0
+XFCB_LinkCount:		ds.b	1	* リンクカウンタ
+XFCB_DevInfo:		ds.b	1	* 装置情報
+XFCB_XDPBPtr:				* XDPBへのポインタ（ブロックデバイス）
+XFCB_DEVHPtr:		ds.l	1	* DEVHへのポインタ（キャラクタデバイス）
+XFCB_FilePtr:		ds.l	1	* ファイルポインタの値
+XFCB_SharePtr:		ds.l	1	* シェアリング情報へのポインタ
+XFCB_AccessMode:	ds.b	1	* アクセスモード
+XFCB_DirEntry:		ds.b	1	* セクタ中のディレクトリエントリ番号
+XFCB_AccessPointer:	ds.b	1	* アクセス中セクタ内位置
+XFCB_Magic11:		ds.b	1	* 不明
+XFCB_AccessCluster:	ds.w	1	* アクセス中クラスタ番号
+XFCB_AccessSector:	ds.l	1	* アクセス中セクタ番号
+XFCB_IOBufferPtr:	ds.l	1	* I/Oバッファへのポインタ
+XFCB_DirSector:		ds.l	1	* ディレクトリエントリのセクタ番号
+XFCB_FilePointerMax:	ds.l	1	* ファイルポインタの上限
+
+XFCB_FileName:		ds.b	8	* ファイル名先頭８文字
+XFCB_FileNameExt:	ds.b	3	* 拡張子名３文字
+XFCB_FileAttr:		ds.b	1	* ファイルアトリビュート
+XFCB_FileName2:		ds.b	10	* ファイル名９文字目以降
+XFCB_FileTime:		ds.w	1	* 時刻
+XFCB_FileDate:		ds.w	1	* 日付
+XFCB_FatNo:		ds.w	1	* ファイルの先頭FAT番号
+XFCB_FileSize:		ds.l	1	* ファイルサイズ
+XFCB_Magic44:		ds.l	1	* 未使用
+XFCB_Magic48:		ds.l	1	* 未使用
+XFCB_Magic4C:		ds.l	1	* 未使用
+XFCB_Magic50:		ds.l	1	* 未使用
+XFCB_Magic54:		ds.l	1	* 未使用
+XFCB_Magic58:		ds.l	1	* 未使用
+XFCB_Magic5C:		ds.l	1	* 未使用
+SizeOfXFCB:
+		.text
+
+
+						* EIS9 : ISO-9660 CD-ROMのエントリ情報
+	.offset	0
+EIS9_EntrySize:		ds.b	1	* エントリのサイズ
+EIS9_Adjust:		ds.b	1	* セクタ位置補正値
+EIS9_SectorIntel:	ds.l	1	* セクタ位置(intel)
+EIS9_SectorMotorola:	ds.l	1	* セクタ位置(motorola)
+EIS9_SizeIntel:		ds.l	1	* サイズ(intel)
+EIS9_SizeMotorola:	ds.l	1	* サイズ(motorola)
+EIS9_Year:		ds.b	1	* 年
+EIS9_Month:		ds.b	1	* 月
+EIS9_Day:		ds.b	1	* 日
+EIS9_Hour:		ds.b	1	* 時
+EIS9_Min:		ds.b	1	* 分
+EIS9_Sec:		ds.b	1	* 秒
+EIS9_Magic18:		ds.b	1	* 
+EIS9_Atr:		ds.b	1	* 属性
+EIS9_Magic1A:		ds.w	1	* 
+EIS9_Magic1C:		ds.w	1	* 
+EIS9_Magic1E:		ds.w	1	* 
+EIS9_NameSize:		ds.b	1	* ファイル名の長さ
+EIS9_Name:		ds.b	1	* ファイル名
+SizeOfEIS9:
+	.text
+
+

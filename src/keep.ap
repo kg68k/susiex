@@ -1,0 +1,172 @@
+*	SCSI Device Driver Stay Regident Work
+*	Copyright (C)1994-95 GORRY.
+*	$Id: keep.ap,v 1.14 1996/12/24 12:40:13 GORRY Exp GORRY $
+
+
+		@APSTART;
+		@STRINGS;
+
+
+		.include	DOSCALL.MAC
+		.include	IOCSCALL.MAC
+
+		.include	GORRY\GORRY.MAC
+		.include	DevDrv.mac
+		.include	sdd.mac
+
+		.include	DevDrv.def
+
+
+*************************************************************************
+
+
+		.text
+		dc.b	'$Id: keep.ap,v 1.14 1996/12/24 12:40:13 GORRY Exp GORRY $',0
+		.even
+
+
+*************************************************************************
+
+
+		.even
+		@STRSEC;
+		.even
+
+
+*************************************************************************
+
+
+		.even
+KEEPWORK::
+
+		.even
+SCSI_TotalBlock::		ds.l	1
+SCSI_BlockCapacityByte::	ds.w	1
+SCSI_CylinderSize::		ds.w	1
+SCSI_CylinderSize2::		ds.w	1
+SCSI_ID::			ds.l	1
+SCSI_BlockCapacity::		ds.b	1
+SCSI_RemovableFlag::		ds.b	1
+SCSI_WriteProtectFlag::		ds.b	1
+SCSI_VerifyCmdFlag::		ds.b	1
+SCSI_VERIFYMode::		ds.b	1
+SCSI_TestRWEXTFlag::		ds.b	1	* 実質上廃止
+SCSI_RWEXTCmdFlag::		ds.b	1
+SCSI_WaitBusyFlag::		ds.b	1
+SCSI_NoREZEROUNITFlag::		ds.b	1
+SCSI_DeviceType::		ds.b	1
+SCSI_CZ6MO1Flag::		ds.b	1
+SCSI_Version::			ds.b	1
+
+		.even
+RetryFlag::			ds.b	1
+ReqRemakeDPB::			ds.b	1
+RemakeDPBRetryFlag::		ds.b	1
+DPBCount::			ds.b	1
+DPBMaxCount::			ds.b	1
+ForceEjectFlag::		ds.b	1
+ForceProtectFlag::		ds.b	1
+DisableUserEjectFlag::		ds.b	1
+DisableOSEjectFlag::		ds.b	1
+LastExchangeFlag::		ds.b	1
+RealEjectedFlag::		ds.b	1
+ReqAskSCSIConnect::		ds.b	1
+ReqSendRezeroUnit::		ds.b	1
+AudioCDExchangeFlag::		ds.b	1
+CDROMExchangeFlag::		ds.b	1
+BrowseResourceFlag::		ds.b	1
+ReqSendPlayAudioAdrFlag::	ds.b	1
+
+		.even
+SDDMode::			ds.w	1
+HumanVersion::			ds.w	1
+
+		.even
+LastFindDirIndexPtr::		ds.l	1
+LastFindFileIndexPtr::		ds.l	1
+ReturnResult::			ds.l	1
+
+		.even
+SpOption_98C::			ds.l	1
+SpOption_TEJ::			dc.l	EJECTTIME
+SpOption_TWA::			dc.l	WAITTIME
+SpOption_TIN::			dc.l	INSERTTIME
+
+		.even
+DivideAccessSize::		ds.l	1
+
+		.even
+PC98GetIPLRetryCount::		ds.l	1
+
+		.even
+IBMFDISKPartSec::		ds.l	1
+IBMFDISKExPartFlag::		ds.b	1
+
+		.even
+InstallSwitch::			ds.l	1
+
+		.even
+FormatType::			ds.w	1
+
+		.even
+DeviceInstalled::		ds.b	1
+
+		.even
+LastAccessTime::		ds.l	1
+LastAccessDate::		ds.l	1
+
+		.even
+DDDStack::			ds.l	1
+
+		.even
+CDROM_DataAddress::		ds.l	1
+CDROM_SectorSize::		ds.w	1
+FindDataTOC_DataAddress::	ds.l	1
+FindDataTOC_TrackNo::		ds.b	1
+FindDataTOC_StartTrackNo::	ds.b	1
+FindDataTOC_EndTrackNo::	ds.b	1
+
+		.even
+VolumeEIS9::			ds.b	SizeOfEIS9+255
+
+		.even
+DPBTable::			ds.b	MAXDPB*SizeOf1DPBTable
+		.even
+DPBBuf::			ds.b	MAXDPB*SizeOfXDPB
+		.even
+OldDINFBuf::			ds.b	MAXDPB*SizeOfDINF
+		.even
+DriveNameBuf::			ds.b	MAXDPB+1
+		.even
+TmpDINFBuf::			ds.b	SizeOfDINF
+		.even
+SCSI_DATABuf::
+SCSI_REQUESTBuf::
+SCSI_INQUIRYBuf::
+SCSI_MODESENSEBuf::
+SCSI_READCAPBuf::
+BootSecReadBuf::
+PartitionSecReadBuf::		ds.b	2048
+CDROMHeadSecReadBuf::		ds.b	2048
+
+		.even
+CDROMCacheBufSize::		ds.w	1
+SoftVerifyBufSize::		ds.l	1
+CDROMCacheIndex::		ds.l	1
+CDROMSecNoTable::		ds.l	MAXCDROMCacheBufSize
+
+		.even
+CDROMCacheBuf::
+IPLSecReadBuf::
+SoftVerifyBuf::			ds.b	DEFSoftVerifyBufSize
+		.even
+
+		.even
+
+
+*************************************************************************
+
+
+KEEPEND::
+
+

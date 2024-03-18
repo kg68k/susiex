@@ -1,0 +1,741 @@
+*	Block Device Driver Utility
+*	Copyright (C)1994-95 GORRY.
+*	$Id: devdrv.ap,v 1.3 1995/05/09 12:35:56 GORRY Exp GORRY $
+
+
+		@APSTART;
+		@STRINGS;
+
+
+		.include	DOSCALL.MAC
+		.include	GORRY\GORRY.MAC
+		.include	DevDrv.MAC
+
+
+*************************************************************************
+
+
+NoTouchLastDEVHPtr	=	1	* V0.99EからHUWK_LastDEVHPtrはいじらないことにした。
+
+
+*************************************************************************
+
+
+		dc.b	'$Id: devdrv.ap,v 1.3 1995/05/09 12:35:56 GORRY Exp GORRY $',0
+		.even
+
+
+*************************************************************************
+
+
+*	long	_GetPDriveNo( long LDriveNo );
+*
+*		論理ドライブ番号から物理ドライブ番号を得る。
+*		スーパーバイザモードでコールする必要がある。
+*		in	$00(sp).l	論理ドライブ番号
+*		out	d0	物理ドライブ番号(a:=0,b:=1・・・)
+*				-1	物理ドライブが割り当てられていない
+*				-2	ドライブ番号が大きすぎる
+
+
+		@xproc	[ __GetPDriveNo ] {
+			@param	[ $00(a6), CALL_DriveNo ].l;
+			@return	[ d0, ErrCode ].l;
+
+			move.l	a6,-(sp)
+			lea	8(sp),a6
+			@frame	[ a5 ] {
+				movem.l	d1/d2/a0,-(sp)
+
+				* ドライブ番号チェック
+				move.l	CALL_DriveNo,d0
+				moveq.l	#0,d1
+				move.b	(HUWK_LastDrive),d1
+				cmp.l	d1,d0
+				@if<	{
+					moveq.l	#-2,ErrCode
+					bra	?_Quit
+				}
+
+				* 物理ドライブ番号に変換
+				lea	HUWK_XDNO,a0
+				move.b	(a0,d0.w),ErrCode
+
+			  ?_Quit::
+				movem.l	(sp)+,d1/d2/a0
+			}
+			move.l	(sp)+,a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	_GetLDriveNo( long PDriveNo );
+*
+*		物理ドライブ番号から論理ドライブ番号を得る。
+*		スーパーバイザモードでコールする必要がある。
+*		in	$00(sp).l	物理ドライブ番号
+*		out	d0	論理ドライブ番号(a:=0,b:=1・・・)
+*				-1	論理ドライブが割り当てられていない
+*				-2	ドライブ番号が大きすぎる
+
+
+		@xproc	[ __GetLDriveNo ] {
+			@param	[ $00(a6), CALL_DriveNo ].l;
+			@return	[ d0, ErrCode ].l;
+
+			move.l	a6,-(sp)
+			lea	8(sp),a6
+			@frame	[ a5 ] {
+				movem.l	d1/d2/a0,-(sp)
+
+				* ドライブ番号チェック
+				move.l	CALL_DriveNo,d0
+				moveq.l	#0,d1
+				move.b	(HUWK_LastDrive),d1
+				cmp.l	d1,d0
+				@if<	{
+					moveq.l	#-2,ErrCode
+					bra	?_Quit
+				}
+
+				* 論理ドライブ番号に変換
+				lea	HUWK_XDNO,a0
+				moveq.l	#0,d2
+				@repeat [ d1 ].w {
+					cmp.b	(a0)+,d0
+					beq	?_Found
+					addq.w	#1,d2
+				}
+				moveq.l	#-1,ErrCode
+				bra	?_Quit
+			  ?_Found::
+				move.l	d2,ErrCode
+
+			  ?_Quit::
+				movem.l	(sp)+,d1/d2/a0
+			}
+			move.l	(sp)+,a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	_AskDrive( long DriveNo, struct DINF * );
+*
+*		ドライブのデバイスドライバ情報を得る。
+*		スーパーバイザモードでコールする必要がある。
+*		in	$00(sp).l	論理ドライブ番号(a:=0,b:=1・・・)
+*					$100+nで物理ドライブ番号となる。
+*			$04(sp).l	デバイスドライバ情報を返すバッファへのポインタ
+*					$00.l	物理ドライブ番号(A:=0,B:=1・・・)
+*					$04.l	デバイスヘッダ(DEVH)へのポインタ
+*					$08.l	内部DPB(XDPB)へのポインタ
+*		out	d0	負でエラー
+*				-1	物理ドライブが割り当てられていない
+*				-2	ドライブ番号が大きすぎる
+*				-4	ドライブは仮想デバイスである
+
+
+		@xproc	[ __AskDrive ] {
+			@param	[ $00(a6), CALL_DriveNo ].l;
+			@param	[ $04(a6), CALL_DINFPtr ].l;
+			@return	[ d0, ErrCode ].l;
+
+			move.l	a6,-(sp)
+			lea	8(sp),a6
+			@frame	[ a5 ] {
+				movem.l	d7/a0/a2/a3/a4,-(sp)
+
+				* ドライブ番号チェック
+				move.l	CALL_DriveNo,d0
+				cmp.b	(HUWK_LastDrive),d0
+				@if<	{
+					moveq.l	#-2,ErrCode
+					bra	?_Quit
+				}
+
+				* 物理ドライブ番号に変換
+				cmpi.l	#$100,d0
+				@ifcs	{
+					lea	HUWK_XDNO,a0
+					move.b	(a0,d0.w),d0
+				} @else {
+					andi.l	#$ff,d0
+				}
+				move.l	d0,d7
+
+				* 物理ドライブ番号を格納
+				move.l	CALL_DINFPtr,a0
+				move.l	d7,$00(a0)
+
+				* ドライブワークテーブル(XDRV)をポイントする
+				move.l	d7,d0
+				mulu	#SizeOfXDRV,d0
+				move.l	(HUWK_XDRVPtr),a4
+				adda.w	d0,a4
+
+				* ドライブワークテーブルの内容をチェックする
+				move.b	XDRV_DrvKind(a4),d0
+				@switch [ d0 ].b {
+				  @case #$40:
+					@break;
+				  @case #$50:
+					moveq.l	#-4,d0
+					bra	?_Quit
+				  @case #$60:
+					moveq.l	#-4,d0
+					bra	?_Quit
+				  @default:
+					moveq.l	#-1,d0
+					bra	?_Quit
+				}
+
+				* 内部DPBテーブル(XDPB)を読み出す
+				move.l	XDRV_XDPBPtr(a4),a3
+
+				* デバイスヘッダ(DEVH)を読み出す
+				move.l	XDPB_DEVHPtr(a3),a2
+
+				* 結果格納
+				move.l	CALL_DINFPtr,a0
+				move.l	a2,$04(a0)
+				move.l	a3,$08(a0)
+				moveq.l	#0,d0
+
+			  ?_Quit::
+				movem.l	(sp)+,d7/a0/a2/a3/a4
+			}
+			move.l	(sp)+,a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	_RegistDrive( long DriveNo, struct DINF * );
+*
+*		ドライブを登録する。
+*		in	$00(sp).l	登録先論理ドライブ番号(a:=0,b:=1・・・)
+*					$100+nで物理ドライブ番号となる。
+*			$04(sp).l	デバイスドライバ情報を格納したバッファへのポインタ
+*					$00.l	登録先物理ドライブ番号を返す(A:=0,B:=1・・・)
+*					$04.l	登録先デバイスヘッダ(DEVH)へのポインタ
+*					$08.l	登録先内部DPB(XDPB)へのポインタ
+*		out	d0	負でエラー
+*				-2	ドライブ番号が大きすぎる
+*				-3	ドライブはすでに登録されている
+*				-4	ドライブは仮想デバイスである
+
+		@xproc	[ __RegistDrive ] {
+			@param	[ $00(a6), CALL_DriveNo ].l;
+			@param	[ $04(a6), CALL_DINFPtr ].l;
+			@return	[ d0, ErrCode ].l;
+
+			move.l	a6,-(sp)
+			lea	8(sp),a6
+			@frame	[ a5 ] {
+				movem.l	d1/d2/d7/a0/a2/a3/a4,-(sp)
+
+				* ドライブ番号チェック
+				move.l	CALL_DriveNo,d0
+				cmp.b	(HUWK_LastDrive),d0
+				@if<	{
+					moveq.l	#-2,ErrCode
+					bra	?_Quit
+				}
+
+				* 物理ドライブ番号に変換
+				cmpi.l	#$100,d0
+				@ifcs	{
+					lea	HUWK_XDNO,a0
+					move.b	(a0,d0.w),d0
+				} @else {
+					andi.l	#$ff,d0
+				}
+				move.l	d0,d7
+
+				* 物理ドライブ番号を格納
+				move.l	CALL_DINFPtr,a0
+				move.l	d7,$00(a0)
+
+				* ドライブワークテーブル(XDRV)をポイントする
+				move.l	d7,d0
+				mulu	#SizeOfXDRV,d0
+				move.l	(HUWK_XDRVPtr),a4
+				adda.w	d0,a4
+
+				* ドライブワークテーブルの内容をチェックする
+				move.b	XDRV_DrvKind(a4),d0
+				@switch [ d0 ].b {
+				  @case #$00:
+					@break;
+				  @case #$40:
+					moveq.l	#-3,d0
+					bra	?_Quit
+				  @case #$50:
+					moveq.l	#-4,d0
+					bra	?_Quit
+				  @case #$60:
+					moveq.l	#-4,d0
+					bra	?_Quit
+				  @default:
+					moveq.l	#-2,d0
+					bra	?_Quit
+				}
+
+				* ポイント先読み出し
+				move.l	CALL_DINFPtr,a0
+				move.l	$04(a0),a2
+				move.l	$08(a0),a3
+
+				* オープン中のファイルのFCBの
+				* 内部DPBテーブル(XDPB)へのポインタを書き換える
+				move.l	XDRV_XDPBPtr(a4),d2
+				move.w	(HUWK_FilesNum),d1
+				@repeat [ d1 ].w {
+					* DOSコールを使用せずに_GET_FCB_ADRを呼び出す
+					movem.l	d1-d7/a0-a6,-(sp)
+					movea.l	($1800+(_GET_FCB_ADR-$FF00)*4),a0
+					move.w	d1,-(sp)
+					move.l	sp,a6
+					jsr	(a0)
+					addq.w	#2,sp
+					movem.l	(sp)+,d1-d7/a0-a6
+
+					tst.l	d0
+					@continue.mi;
+					move.l	d0,a0
+					tst.b	XFCB_LinkCount(a0)
+					@continue.eq;
+					tst.b	XFCB_DevInfo(a0)
+					@continue.mi;
+					cmp.l	XFCB_XDPBPtr(a0),d2
+					@ifeq	{
+						move.l	a3,XFCB_XDPBPtr(a0)
+					}
+				}
+
+				* 内部DPBテーブル(XDPB)を格納する
+				move.l	a3,XDRV_XDPBPtr(a4)
+
+				* ドライブ番号(DEVH)を格納する
+				move.b	d7,XDPB_DriveNo(a3)
+
+				* デバイスヘッダ(DEVH)を格納する
+				move.l	a2,XDPB_DEVHPtr(a3)
+
+				* ドライブ種別を登録する
+				move.b	#$40,XDRV_DrvKind(a4)
+
+				* 現在ディレクトリ情報クリア
+				clr.b	XDRV_Path(a4)
+				clr.w	XDRV_Magic4A(a4)
+
+				* DPBを接続する
+				move.l	(HUWK_XDPBPtr),a0
+				@do {
+					move.l	XDPB_NextXDPBPtr(a0),d0
+					@break.mi;
+					move.l	d0,a0
+				} @while.t;
+				move.l	a3,XDPB_NextXDPBPtr(a0)
+				move.l	d0,XDPB_NextXDPBPtr(a3)
+
+				* ドライブ数増加
+				addq.b	#1,(HUWK_DriveNum)
+
+				* 結果格納
+				moveq.l	#0,d0
+
+			  ?_Quit::
+				movem.l	(sp)+,d1/d2/d7/a0/a2/a3/a4
+			}
+			move.l	(sp)+,a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	_UnregistDrive( long DriveNo, struct DINF * );
+*
+*		ドライブの登録を解除する。
+*		in	$00(sp).l	登録解除先論理ドライブ番号(a:=0,b:=1・・・)
+*					$100+nで物理ドライブ番号となる。
+*			$04(sp).l	デバイスドライバ情報を格納したバッファへのポインタ
+*					$00.l	登録解除先物理ドライブ番号を返す(A:=0,B:=1・・・)
+*					$04.l	登録解除先デバイスヘッダ(DEVH)へのポインタを返す
+*					$08.l	登録解除先内部DPB(XDPB)へのポインタを返す
+*		out	d0	負でエラー
+*				-2	ドライブ番号が大きすぎる
+*				-4	ドライブは仮想デバイスである
+*				-5	ドライブは登録されていない
+
+		@xproc	[ __UnregistDrive ] {
+			@param	[ $00(a6), CALL_DriveNo ].l;
+			@param	[ $04(a6), CALL_DINFPtr ].l;
+			@return	[ d0, ErrCode ].l;
+
+			move.l	a6,-(sp)
+			lea	8(sp),a6
+			@frame	[ a5 ] {
+				movem.l	d1/d2/d7/a0/a1/a2/a3/a4,-(sp)
+
+				* ドライブ番号チェック
+				move.l	CALL_DriveNo,d0
+				cmp.b	(HUWK_LastDrive),d0
+				@if<	{
+					moveq.l	#-2,ErrCode
+					bra	?_Quit
+				}
+
+				* 物理ドライブ番号に変換
+				cmpi.l	#$100,d0
+				@ifcs	{
+					lea	HUWK_XDNO,a0
+					move.b	(a0,d0.w),d0
+				} @else {
+					andi.l	#$ff,d0
+				}
+				move.l	d0,d7
+
+				* 物理ドライブ番号を格納
+				move.l	CALL_DINFPtr,a0
+				move.l	d7,$00(a0)
+
+				* ドライブワークテーブル(XDRV)をポイントする
+				move.l	d7,d0
+				mulu	#SizeOfXDRV,d0
+				move.l	(HUWK_XDRVPtr),a4
+				adda.w	d0,a4
+
+				* ドライブワークテーブルの内容をチェックする
+				move.b	XDRV_DrvKind(a4),d0
+				@switch [ d0 ].b {
+				  @case #$00:
+					moveq.l	#-5,d0
+					bra	?_Quit
+				  @case #$40:
+					@break;
+				  @case #$50:
+					moveq.l	#-4,d0
+					bra	?_Quit
+				  @case #$60:
+					moveq.l	#-4,d0
+					bra	?_Quit
+				  @default:
+					moveq.l	#-2,d0
+					bra	?_Quit
+				}
+
+				* 内部DPBテーブル(XDPB)を読み出す
+				move.l	XDRV_XDPBPtr(a4),a3
+				clr.l	XDRV_XDPBPtr(a4)
+
+				* オープン中のファイルのFCBの
+				* 内部DPBテーブル(XDPB)へのポインタを書き換える
+				move.w	(HUWK_FilesNum),d1
+				@repeat [ d1 ].w {
+					* DOSコールを使用せずに_GET_FCB_ADRを呼び出す
+					movem.l	d1-d7/a0-a6,-(sp)
+					movea.l	($1800+(_GET_FCB_ADR-$FF00)*4),a0
+					move.w	d1,-(sp)
+					move.l	sp,a6
+					jsr	(a0)
+					addq.w	#2,sp
+					movem.l	(sp)+,d1-d7/a0-a6
+
+					tst.l	d0
+					@continue.mi;
+					move.l	d0,a0
+					tst.b	XFCB_LinkCount(a0)
+					@continue.eq;
+					tst.b	XFCB_DevInfo(a0)
+					@continue.mi;
+					cmp.l	XFCB_XDPBPtr(a0),a3
+					@ifeq	{
+						clr.l	XFCB_XDPBPtr(a0)
+					}
+				}
+
+				* デバイスヘッダ(DEVH)を読み出す
+				move.l	XDPB_DEVHPtr(a3),a2
+				clr.l	XDPB_DEVHPtr(a3)
+
+				* ドライブ種別を登録する
+				move.b	#$00,XDRV_DrvKind(a4)
+
+				* 現在ディレクトリ情報クリア
+				clr.b	XDRV_Path(a4)
+				clr.w	XDRV_Magic4A(a4)
+
+				* DPBを切り離す
+				move.l	(HUWK_XDPBPtr),a0
+				@do {
+					cmp.l	a3,a0
+					@break.eq;
+					move.l	a0,a1
+					move.l	XDPB_NextXDPBPtr(a0),a0
+				} @while.t;
+				cmp.l	(HUWK_XDPBPtr),a0
+				@ifeq	{
+					move.l	XDPB_NextXDPBPtr(a0),(HUWK_XDPBPtr)
+				} @else {
+					move.l	XDPB_NextXDPBPtr(a0),XDPB_NextXDPBPtr(a1)
+				}
+
+				* ドライブ数減少
+				subq.b	#1,(HUWK_DriveNum)
+
+				* ポイント先書き込み
+				move.l	CALL_DINFPtr,a0
+				move.l	a2,$04(a0)
+				move.l	a3,$08(a0)
+
+				* 結果格納
+				moveq.l	#0,d0
+
+			  ?_Quit::
+				movem.l	(sp)+,d1/d2/d7/a0/a1/a2/a3/a4
+			}
+			move.l	(sp)+,a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	_RegistDeviceDriver( struct DEVH *DEVHPtr );
+*
+*		デバイスドライバを登録する。
+*		in	$00(sp).l	登録先デバイスヘッダ(DEVH)へのポインタ
+*		out	d0	負でエラー
+*				-6	デバイスドライバテーブルが異常
+
+		@xproc	[ __RegistDeviceDriver ] {
+			@param	[ $00(a6), CALL_DEVHPtr ].l;
+			@return	[ d0, ErrCode ].l;
+
+			move.l	a6,-(sp)
+			lea	8(sp),a6
+			@frame	[ a5 ] {
+				movem.l	d1/a0/a1,-(sp)
+
+ .if (NoTouchLastDEVHPtr.eq.0)
+				* デバイスドライバ最後をポイント
+				move.l	(HUWK_LastDEVHPtr),a0
+ .else
+				* デバイスドライバ先頭をポイント
+				lea	$6800,a2
+				@repeat [ d0, #($10000-$6800)/2-1 ].w {
+					cmpi.l	#'NUL ',(a2)
+					beq	?_Found
+					addq.l	#2,a2
+				}
+				bra	?_Err_NotFoundNUL
+
+			  ?_Found::
+				lea	-$0e(a2),a2
+
+				* リンクを辿って探す
+				@do {
+					move.l	DEVH_NextDEVHPtr(a2),d0
+					@break.mi;
+					move.l	d0,a2
+				} @while.t;
+
+				* デバイスドライバ最後をポイント
+				move.l	a2,a0
+ .endif
+
+				* デバイスドライバを接続
+				move.l	DEVH_NextDEVHPtr(a0),d1
+				move.l	CALL_DEVHPtr,a1
+				move.l	a1,DEVH_NextDEVHPtr(a0)
+				@do {
+					move.l	DEVH_NextDEVHPtr(a1),d0
+					@break.mi;
+					move.l	d0,a1
+				} @while.t;
+				move.l	d1,DEVH_NextDEVHPtr(a1)
+
+ .if (NoTouchLastDEVHPtr.eq.0)
+				move.l	a1,(HUWK_LastDEVHPtr)
+ .endif
+
+				* 結果格納
+				moveq.l	#0,d0
+				bra	?_Quit
+
+			  ?_Err_NotFoundNUL::
+				moveq.l	#-6,d0
+				bra	?_Quit
+
+			  ?_Quit::
+				movem.l	(sp)+,d1/a0/a1
+			}
+			move.l	(sp)+,a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	_RegistDeviceDriver2( struct DEVH *DEVHPtr );
+*
+*		デバイスドライバを登録する。
+*		最終デバイスドライバのひとつ前に登録する。
+*		in	$00(sp).l	登録先デバイスヘッダ(DEVH)へのポインタ
+*		out	d0	負でエラー
+*				-7	デバイスドライバテーブルが異常
+
+		@xproc	[ __RegistDeviceDriver2 ] {
+			@param	[ $00(a6), CALL_DEVHPtr ].l;
+			@return	[ d0, ErrCode ].l;
+
+			move.l	a6,-(sp)
+			lea	8(sp),a6
+			@frame	[ a5 ] {
+				movem.l	d1/a0/a1,-(sp)
+
+				* デバイスドライバ先頭をポイント
+				lea	$6800,a2
+				@repeat [ d0, #($10000-$6800)/2-1 ].w {
+					cmpi.l	#'NUL ',(a2)
+					beq	?_Found
+					addq.l	#2,a2
+				}
+				bra	?_Err_NotFoundNUL
+
+			  ?_Found::
+				lea	-$0e(a2),a2
+
+				* リンクを辿って探す
+				@do {
+					move.l	DEVH_NextDEVHPtr(a2),d0
+					@break.mi;
+					move.l	a2,a1
+					move.l	d0,a2
+				} @while.t;
+
+				* デバイスドライバ最後のひとつ前をポイント
+				move.l	a1,a0
+
+				* デバイスドライバを接続
+				move.l	DEVH_NextDEVHPtr(a0),d1
+				move.l	CALL_DEVHPtr,a1
+				move.l	a1,DEVH_NextDEVHPtr(a0)
+				@do {
+					move.l	DEVH_NextDEVHPtr(a1),d0
+					@break.mi;
+					move.l	d0,a1
+				} @while.t;
+				move.l	d1,DEVH_NextDEVHPtr(a1)
+
+				* 結果格納
+				moveq.l	#0,d0
+				bra	?_Quit
+
+			  ?_Err_NotFoundNUL::
+				moveq.l	#-6,d0
+				bra	?_Quit
+
+			  ?_Quit::
+				movem.l	(sp)+,d1/a0/a1
+			}
+			move.l	(sp)+,a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	long	_UnregistDeviceDriver( struct DEVH *DEVHPtr );
+*
+*		デバイスドライバの登録を解除する。
+*		in	$00(sp).l	登録解除先デバイスヘッダ(DEVH)へのポインタ
+*		out	d0	負でエラー
+*				-6	デバイスドライバテーブルが異常
+*				-7	デバイスドライバテーブルが存在しない
+
+		@xproc	[ __UnregistDeviceDriver ] {
+			@param	[ $00(a6), CALL_DEVHPtr ].l;
+			@return	[ d0, ErrCode ].l;
+
+			move.l	a6,-(sp)
+			lea	8(sp),a6
+			@frame	[ a5 ] {
+				movem.l	d1/a0/a1/a2/a3,-(sp)
+
+				* デバイスドライバ先頭をポイント
+				lea	$6800,a2
+				@repeat [ d0, #($10000-$6800)/2-1 ].w {
+					cmpi.l	#'NUL ',(a2)
+					beq	?_Found
+					addq.l	#2,a2
+				}
+				bra	?_Err_NotFoundNUL
+
+			  ?_Found::
+				lea	-$0e(a2),a2
+
+				* リンクを辿って探す
+				move.l	CALL_DEVHPtr,a3
+				@do {
+					cmp.l	a3,a2
+					@break.eq;
+					move.l	DEVH_NextDEVHPtr(a2),d0
+					bmi	?_Err_NoDEVH
+					move.l	a2,a1
+					move.l	d0,a2
+				} @while.t;
+
+				* デバイスドライバ切り離し
+				move.l	DEVH_NextDEVHPtr(a2),DEVH_NextDEVHPtr(a1)
+ .if (NoTouchLastDEVHPtr.eq.0)
+				@ifmi	{
+					move.l	a1,(HUWK_LastDEVHPtr)
+				}
+ .endif
+
+				* 結果格納
+				moveq.l	#0,d0
+				bra	?_Quit
+
+			  ?_Err_NotFoundNUL::
+				moveq.l	#-6,d0
+				bra	?_Quit
+
+			  ?_Err_NoDEVH::
+				moveq.l	#-7,d0
+				bra	?_Quit
+
+			  ?_Quit::
+				movem.l	(sp)+,d1/a0/a1
+			}
+			move.l	(sp)+,a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+		.even
+		@STRSEC;
+		.even
+
+
+*************************************************************************
+
+

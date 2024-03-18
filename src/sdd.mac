@@ -1,0 +1,66 @@
+*	SCSI Device Driver Work Define
+*	Copyright (C)1994 GORRY.
+*	$Id: sdd.mac,v 1.9 1995/07/23 23:30:36 GORRY Exp GORRY $
+
+
+*************************************************************************
+
+
+	.ifndef	_S_SELECT2
+		_S_SELECT2:	equ	$02
+	.endif
+	.ifndef	_S_DATAIN_P
+		_S_DATAIN_P:	equ	$0b
+	.endif
+	.ifndef	_S_DATAOUT_P
+		_S_DATAOUT_P:	equ	$0c
+	.endif
+	.ifndef	_S_VERIFY
+		_S_VERIFY:	equ	$28
+	.endif
+	.ifndef	_S_MODESENSE
+		_S_MODESENSE:	equ	$29
+	.endif
+	.ifndef	_S_MODESELECT
+		_S_MODESELECT:	equ	$2a
+	.endif
+	.ifndef	_S_EJECT6MO1
+		_S_EJECT6MO1:	equ	$30
+	.endif
+
+
+*************************************************************************
+
+
+RETRYCOUNT		=	1
+WRITERETRYCOUNT		=	1
+EJECTTIME		=	100
+WAITTIME		=	20
+INSERTTIME		=	100
+MAXDPB			=	16
+MAXCDROMCacheBufSize	=	32
+MINCDROMCacheBufSize	=	2
+DEFCDROMCacheBufSize	=	8
+SoftVerifyBufSecSize	=	2048
+DEFSoftVerifyBufSize	=	SoftVerifyBufSecSize*DEFCDROMCacheBufSize
+SCSI_BUSYCODE		=	8
+SCSI_REQCODE		=	2
+
+
+*************************************************************************
+
+
+		.offset	0
+DPBTable_XDPBPtr:	ds.l	1
+DPBTable_BaseSec:	ds.l	1
+DPBTable_Sft:		ds.w	1
+DPBTable_NextXDPBPtr:	ds.l	1
+DPBTable_DriveNo:	ds.b	1
+DPBTable_Dummy:		ds.b	1
+SizeOf1DPBTable:
+		.text
+
+
+*************************************************************************
+
+

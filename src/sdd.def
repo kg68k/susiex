@@ -1,0 +1,7 @@
+		.global	DEVD_JpTable
+		.global	DEVD2_JpTable
+		.global	DEVD_HOOK
+		.global	__DDD_INSTALL
+		.global	InstallSDD
+		.global	InstallSCSICALL
+		.global	SetBufferSize

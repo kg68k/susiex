@@ -1,0 +1,4053 @@
+*	System of Universal SCSI Integrated Engine
+*	Copyright 1994-95 GORRY.
+*	$Id: susie.ap,v 1.24 1997/09/10 01:48:15 GORRY Exp GORRY $
+
+
+		@APSTART;
+		@STRINGS;
+
+
+		.include	DOSCALL.MAC
+		.include	IOCSCALL.MAC
+		.include	FEFUNC10.H
+
+		.include	GORRY\GORRY.MAC
+		.include	DevDrv.mac
+		.include	sdd.mac
+		.include	sddcall.mac
+		.include	susie.mac
+
+		.include	pstart.def
+		.include	sddhed.def
+		.include	sdd.def
+		.include	keep.def
+		.include	DevDrv.def
+
+
+*************************************************************************
+
+
+		.text
+		dc.b	'$Id: susie.ap,v 1.24 1997/09/10 01:48:15 GORRY Exp GORRY $',0
+		.even
+
+
+*************************************************************************
+
+
+
+
+*************************************************************************
+
+
+EXEC_START::
+		bsr	INIT
+		bsr	INIT2
+		bsr	PRINTTITLE				*** TNB
+							* タイトルがいつも２行だと
+							* うっとうしいのでとりあえ
+							* ずこうしました。
+		bsr	CMD
+		bsr	CMD2
+
+		tst.b	＠ReqBusReset(a6)
+		@ifst	{
+			bsr	BusReset
+		}
+
+		tst.b	＠ReqPrintHelp(a6)
+		bst	PRINTHELP
+		tst.b	＠ReqPrintStatus(a6)
+		bst	PRINTSTATUS
+		tst.b	＠ReqRelease(a6)
+		bst	RELEASE
+		tst.b	＠ReqChangeStatus(a6)
+		bst	CHANGESTATUS
+		bra	INSTALL
+
+
+*************************************************************************
+
+
+*	int	DDD_INSTALL( void );
+*
+*		DEVICE=で起動した時のエントリポイント。
+*		in	デバイスドライバ起動方法の通り
+*		out	デバイスドライバ起動方法の通り
+
+
+		@xproc	[ DDD_INSTALL ] {
+
+			st.b	(DeviceInstalled)
+
+			move.l	sp,(DDDStack)
+
+			* 初期化以外はエラー
+			move.b	REQH_CommandCode(a5),d0
+			bne	?_Err_CommandCode
+
+			pea	[ 13,10,0 ](pc)
+			DOS	_PRINT
+			addq.w	#4,sp
+
+			* 初期化
+			bsr	INIT
+
+			* コマンドラインを作成
+			lea	＠DDD_CmdLineBuf(a6),a1
+			move.l	REQH_ParamPtr(a5),a2
+			StrEnd	(a2)+
+			@do {
+				tst.b	(a2)
+				@break.eq;
+				StrCpy	(a2)+,(a1)+
+				move.b	#' ',-1(a1)
+			} @while.t;
+			clr.b	(a1)
+			lea	＠DDD_CmdLineBuf(a6),a1
+			lea	-1(a1),a2
+
+			bsr	INIT2
+			bsr	PRINTTITLE
+			bsr	CMD
+			bsr	CMD2
+
+			tst.b	＠ReqPrintHelp(a6)
+			bst	PRINTHELP
+			tst.b	＠ReqPrintStatus(a6)
+			bst	PRINTSTATUS
+			tst.b	＠ReqRelease(a6)
+			bst	RELEASE
+			tst.b	＠ReqChangeStatus(a6)
+			bst	CHANGESTATUS
+			bra	INSTALL
+
+		  ?_OK_Quit::
+			lea	KEEPEND,a1
+			move.l	＠C_Param(a6),d0
+			@ifne	{
+				jsr	SetBufferSize
+				add.l	d0,a1
+			}
+			move.l	a1,REQH_DevDrvEndPtr(a5)
+			moveq.l	#0,d0
+			bra	?_Quit
+
+		  ?_Err_Quit::
+			move.w	#$700d,d0
+			bra	?_Quit
+
+		  ?_Err_CommandCode::
+			move.w	#$5003,d0
+			bra	?_Quit
+
+		  ?_Quit::
+			move.l	(DDDStack),sp
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	INIT( void );
+*
+*		初期化
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ INIT ] {
+			movem.l	d1-d7/a0-a5,-(sp)
+
+			* DOSコールの移動処理
+			movem.l	a1/a2,-(sp)
+			DOS	_VERNUM
+			cmp.w	#$020f,d0
+			@ifcs	{
+				ToSuper
+				lea.l	$1940.w,a1
+				lea.l	$1a00.w,a2
+				move.l	(a1),d0
+				cmp.l	(a2),d0
+				@ifne	{
+					@repeat [ d0, #$30-1 ].q {
+						move.l	(a1)+,(a2)+
+					}
+				}
+				ToUser
+			}
+			movem.l	(sp)+,a1/a2
+
+			tst.b	(DeviceInstalled)
+			bst	?_Skip_Device
+
+			* プロセスの初期化
+			DOS	_GETPDB
+			move.l	d0,a0
+			lea	PEND,a1
+			move.l	a1,-(sp)
+			suba.l	a0,a1
+			move.l	a1,-(sp)
+			move.l	a0,-(sp)
+			DOS	_SETBLOCK
+			addq.w	#8,sp
+			tst.l	d0
+			bmi	ERROR_MEM
+			lea	-$10(a0),a0
+			move.l	(sp)+,$38(a0)			* プロセスの初期スタックアドレス
+			pea	ABORT(pc)
+			move.w	#$fff2,-(sp)			* アボート時の戻りアドレス
+			DOS	_INTVCS
+			subq.w	#1,(sp)				* CTRL+C時の戻りアドレス
+			DOS	_INTVCS
+			addq.w	#6,sp
+
+			* 高速ＢＳＳクリア
+			movem.l	a1/a2,-(sp)
+			lea	BSSSTART,a1
+			move.l	a1,a6
+			move.l	#(BSSEND-BSSSTART),d0
+			divu	#16,d0
+			moveq.l	#0,d1
+			subq.w	#1,d0
+			@ifpl	{
+				@repeat [ d0 ].w {
+					move.l	d1,(a1)+
+					move.l	d1,(a1)+
+					move.l	d1,(a1)+
+					move.l	d1,(a1)+
+				}
+			}
+			swap	d0
+			subq.w	#1,d0
+			@ifpl	{
+				@repeat [ d0 ].w {
+					move.b	d1,(a1)+
+				}
+			}
+			movem.l	(sp)+,a1/a2
+
+		  ?_Skip_Device::
+			lea	BSSSTART(pc),a6
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a5
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	INIT2( void );
+*
+*		初期化２
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ INIT2 ] {
+			movem.l	d1-d7/a0-a5,-(sp)
+
+			* TWOSCSIチェック
+			SCSI $1e
+			cmpi.b	#-2,d0
+			@ifeq	{
+				st.b	＠ReadyTWOSCSI(a6)
+			}
+
+			ToSuper
+			move.l	($00b8.w),＠DOSERRVectorKeep(a6)
+			jsr	InstallSCSICALL
+			tst.l	d0
+			bmi	ERROR_SCSICALL
+			ToUser
+
+			move.w	#DEFCDROMCacheBufSize,d0
+			jsr	SetBufferSize
+
+			bsr	CutSubst
+			move.l	#-1,＠CmdSCSI_ID(a6)
+			move.w	#-1,＠CmdSCSI_LUN(a6)
+			st.b	＠ReqTestRWEXT1(a6)
+			bsr	InitializeKeepSUSIE
+			bsr	AskSCSIID
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a5
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	PRINTTITLE( void );
+*
+*		タイトル表示
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ PRINTTITLE ] {
+			movem.l	d1-d7/a0-a5,-(sp)
+
+			move.w	#＃STDERR,-(sp)
+			pea	[ 'SUSIE: System of Universal SCSI Integrated Engine : V'
+				  '0'+SUSIEVERH
+				  '.'
+				  '0'+SUSIEVERM
+				  '0'+SUSIEVERL
+				  SUSIEVERR
+				  ' : Copyright 1994-97 GORRY.',13,10,0 ](pc)
+			DOS	_FPUTS
+			addq.w	#6,sp
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a5
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	CMD( void );
+*
+*		コマンドライン解析
+*		in	a2	コマンドラインへのポインタ
+*		out	なし
+
+
+		@xproc	[ CMD ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+			addq.w	#1,a2
+
+			* 環境変数SLASH解析
+			clr.b	＠TmpEnvBuf(a6)
+			pea	＠TmpEnvBuf(a6)
+			clr.l	-(sp)
+			pea	[ 'SLASH',0 ](pc)
+			DOS	_GETENV
+			lea	12(sp),sp
+			tst.l	d0
+			@ifpl	{
+				cmpi.b	#'/',＠TmpEnvBuf(a6)
+				seq.b	＠SlashFlag(a6)
+			}
+
+		  ?_lp::
+			move.l	a2,a3
+			move.b	(a2)+,d0
+			beq	?_e
+			cmpi.b	#' '+1,d0
+			bcs	?_lp
+			cmpi.b	#'-',d0
+			beq	?_Option
+			tst.b	＠SlashFlag(a6)
+			@ifcl	{
+				cmpi.b	#'/',d0
+				beq	?_Option
+			}
+
+			ToUpper	d0
+			cmpi.b	#'*',d0
+			@ifeq	{
+				tst.w	＠CmdDrvCnt(a6)
+				bne	?_Err
+			} @else {
+				cmpi.b	#'@',d0
+				bcs	?_Err
+				cmpi.b	#'Z'+1,d0
+				bcc	?_Err
+			}
+			cmpi.b	#':',(a2)
+			bne	?_Err
+			move.w	＠CmdDrvCnt(a6),d1
+			move.b	d0,＠CmdDrv(a6,d1.w)
+			clr.b	1+＠CmdDrv(a6,d1.w)
+			addq.w	#1,＠CmdDrvCnt(a6)
+			addq.w	#1,a2
+
+		  ?_Next::
+			move.b	(a2),d0
+			cmpi.b	#' '+1,d0
+			bcc	?_Err
+			bra	?_lp
+
+		  ?_Option::
+			move.b	(a2)+,d0
+			ToUpper	d0
+			@switch [ d0 ].b {
+			  @case	#'?':
+				* -?
+				st.b	＠ReqPrintHelp(a6)
+				@break;
+			  @case	#'R':
+				* -R
+				move.b	(a2),d0
+				ToUpper	d0
+				@switch [ d0 ].b {
+				  @case	#'B':
+					* -RB
+					addq.w	#1,a2
+					move.b	(a2),d0
+					ToUpper	d0
+					@switch [ d0 ].b {
+					  @case	#'0':
+						* -RB0
+						addq.w	#1,a2
+						st.b	＠ReqBrowseResource0(a6)
+						clr.b	＠ReqBrowseResource1(a6)
+						@break;
+					  @case	#'1':
+						* -RB1
+						addq.w	#1,a2
+						st.b	＠ReqBrowseResource1(a6)
+						@break;
+					}
+					@break;
+				  @case	#'S':
+					* -RS
+					addq.w	#1,a2
+					st.b	＠ReqBusReset(a6)
+					@break;
+				  @default:
+					st.b	＠ReqRelease(a6)
+					@break;
+				}
+				@break;
+			  @case	#'P':
+				* -P
+				st.b	＠ReqPrintStatus(a6)
+				@break;
+			  @case	#'I':
+				* -I
+				move.b	(a2),d0
+				ToUpper	d0
+				@switch [ d0 ].b {
+				  @case	#'D':
+					* -ID
+					addq.w	#1,a2
+					move.b	(a2)+,d0
+					ToUpper	d0
+					cmpi.b	#'A',d0
+					@ifcc	{
+						subi.b	#'A'-10,d0
+					} @else {
+						subi.b	#'0',d0
+						bcs	?_Err
+						cmpi.b	#9+1,d0
+						bcc	?_Err
+						move.b	(a2),d1
+						subi.b	#'0',d1
+						@ifcc	{
+							cmpi.b	#9+1,d1
+							@ifcs	{
+								add.b	d0,d0
+								add.b	d0,d1
+								add.b	d0,d0
+								add.b	d0,d0
+								add.b	d1,d0
+								addq.w	#1,a2
+							}
+						}
+					}
+					tst.b	＠ReadyTWOSCSI(a6)
+					@ifst	{
+						cmpi.b	#15+1,d0
+					} @else {
+						cmpi.b	#7+1,d0
+					}
+					bcc	?_Err
+					andi.l	#$ff,d0
+					ori.l	#$00080000,d0	* LUN無効
+					move.l	＠CmdSCSI_ID(a6),d1
+					@ifpl	{
+						move.w	d0,d1
+						move.l	d1,d0
+					}
+					move.l	d0,＠CmdSCSI_ID(a6)
+					@break;
+				  @default:
+					st.b	＠I_Option(a6)
+					@break;
+				}
+				@break;
+			  @case	#'L':
+				* -L
+				move.b	(a2),d0
+				ToUpper	d0
+				@switch [ d0 ].b {
+				  @case	#'U':
+					* -LU
+					addq.w	#1,a2
+					move.b	(a2),d0
+					ToUpper	d0
+					@switch [ d0 ].b {
+					  @case	#'N':
+						* -LUN
+						addq.w	#1,a2
+						move.b	(a2)+,d0
+						cmpi.b	#'-',d0
+						@ifeq	{
+							moveq.l	#8,d0	* LUN無効
+						} @else {
+							subi.b	#'0',d0
+							bcs	?_Err
+							cmpi.b	#7+1,d0
+							bcc	?_Err
+						}
+						andi.l	#$ff,d0
+						move.w	d0,＠CmdSCSI_LUN(a6)
+						swap	d0
+						move.l	＠CmdSCSI_ID(a6),d1
+						move.w	d1,d0
+						move.l	d0,＠CmdSCSI_ID(a6)
+						@break;
+					}
+				}
+				@break;
+			  @case	#'K':
+				* -K
+				st.b	＠ReqUnkillDriver(a6)
+				@break;
+			  @case	#'F':
+				* -F
+				st.b	＠ReqForceKillDriver(a6)
+				@break;
+			  @case	#'E':
+				* -E
+				move.b	(a2),d0
+				ToUpper	d0
+				@switch [ d0 ].b {
+				  @case	#'0':
+					* -E0
+					addq.w	#1,a2
+					clr.b	＠ReqForceEject1(a6)
+					st.b	＠ReqForceEject0(a6)
+					@break;
+				  @case	#'1':
+					* -E1
+					addq.w	#1,a2
+					st.b	＠ReqForceEject1(a6)
+					@break;
+				  @case	#'X':
+					* -EX
+					addq.w	#1,a2
+					move.b	(a2),d0
+					@switch [ d0 ].b {
+					  @case	#'0':
+						* -EX0
+						addq.w	#1,a2
+						clr.b	＠ReqTestRWEXT1(a6)
+						st.b	＠ReqTestRWEXT0(a6)
+						@break;
+					  @case	#'1':
+						* -EX1
+						addq.w	#1,a2
+						st.b	＠ReqTestRWEXT1(a6)
+						@break;
+					  @default:
+						* -EX
+						st.b	＠ReqTestRWEXT1(a6)
+						@break;
+					}
+					@break;
+				  @default:
+					st.b	＠ReqForceEject1(a6)
+					@break;
+				}
+				@break;
+			  @case	#'W':
+				* -W
+				move.b	(a2),d0
+				@switch [ d0 ].b {
+				  @case	#'0':
+					* -W0
+					addq.w	#1,a2
+					clr.b	＠ReqForceProtect1(a6)
+					st.b	＠ReqForceProtect0(a6)
+					@break;
+				  @case	#'1':
+					* -W1
+					addq.w	#1,a2
+					st.b	＠ReqForceProtect1(a6)
+					@break;
+				  @default:
+					st.b	＠ReqForceProtect1(a6)
+					@break;
+				}
+				@break;
+			  @case	#'S':
+				* -S
+				move.b	(a2),d0
+				ToUpper	d0
+				@switch [ d0 ].b {
+				  @case	#'I':
+					* -SI
+					addq.w	#1,a2
+					st.b	＠SI_Option(a6)
+					@break;
+				  @default:
+					@break;
+				}
+				@break;
+			  @case	#'9':
+				move.b	(a2),d0
+				@switch [ d0 ].b {
+				  @case	#'8':
+					addq.w	#1,a2
+					move.b	(a2),d0
+					@switch [ d0 ].b {
+					  @case	#':':
+						addq.w	#1,a2
+						move.b	(a2),d0
+						ToUpper	d0
+						@switch [ d0 ].b {
+						  @case	#'C':
+							* -98:C
+							addq.w	#1,a2
+							st.b	＠98C_Option(a6)
+							bsr	?_GetNum
+							move.l	d0,＠98C_Param(a6)
+							@break;
+						}
+						@break;
+					}
+					@break;
+				}
+				@break;
+			  @case	#'B':
+				* -B
+				move.b	(a2),d0
+				@switch [ d0 ].b {
+				  @case	#'0':
+					* -B0
+					addq.w	#1,a2
+					clr.b	＠ReqWaitBusy1(a6)
+					st.b	＠ReqWaitBusy0(a6)
+					@break;
+				  @case	#'1':
+					* -B1
+					addq.w	#1,a2
+					st.b	＠ReqWaitBusy1(a6)
+					@break;
+				  @default:
+					st.b	＠ReqWaitBusy1(a6)
+					@break;
+				}
+				@break;
+			  @case	#'V':
+				* -V
+				move.b	(a2),d0
+				@switch [ d0 ].b {
+				  @case	#'0':
+					* -V0
+					addq.w	#1,a2
+					clr.b	＠ReqHardVerify3(a6)
+					clr.b	＠ReqHardVerify2(a6)
+					clr.b	＠ReqHardVerify1(a6)
+					st.b	＠ReqHardVerify0(a6)
+					@break;
+				  @case	#'1':
+					* -V1
+					addq.w	#1,a2
+					clr.b	＠ReqHardVerify3(a6)
+					clr.b	＠ReqHardVerify2(a6)
+					st.b	＠ReqHardVerify1(a6)
+					@break;
+				  @case	#'2':
+					* -V2
+					addq.w	#1,a2
+					clr.b	＠ReqHardVerify3(a6)
+					st.b	＠ReqHardVerify2(a6)
+					@break;
+				  @case	#'3':
+					* -V3
+					addq.w	#1,a2
+					st.b	＠ReqHardVerify3(a6)
+					@break;
+				  @default:
+					clr.b	＠ReqHardVerify3(a6)
+					clr.b	＠ReqHardVerify2(a6)
+					st.b	＠ReqHardVerify1(a6)
+					@break;
+				}
+				@break;
+			  @case	#'H':
+				* -H
+				move.b	(a2),d0
+				@switch [ d0 ].b {
+				  @case	#'0':
+					* -H0
+					addq.w	#1,a2
+					clr.b	＠ReqAllowRezeroUnit1(a6)
+					st.b	＠ReqAllowRezeroUnit0(a6)
+					@break;
+				  @case	#'1':
+					* -H1
+					addq.w	#1,a2
+					st.b	＠ReqAllowRezeroUnit1(a6)
+					@break;
+				  @default:
+					st.b	＠ReqAllowRezeroUnit1(a6)
+					@break;
+				}
+				@break;
+			  @case	#'Z':
+				* -Z
+				st.b	＠Z_Option(a6)
+				@break;
+			  @case	#'U':
+				* -U
+				move.b	(a2),d0
+				@switch [ d0 ].b {
+				  @case	#'0':
+					* -U0
+					addq.w	#1,a2
+					clr.b	＠ReqAllowUnconnect1(a6)
+					st.b	＠ReqAllowUnconnect0(a6)
+					@break;
+				  @case	#'1':
+					* -U1
+					addq.w	#1,a2
+					st.b	＠ReqAllowUnconnect1(a6)
+					@break;
+				  @default:
+					st.b	＠ReqAllowUnconnect1(a6)
+					@break;
+				}
+				@break;
+			  @case	#'T':
+				move.b	(a2),d0
+				ToUpper	d0
+				@switch [ d0 ].b {
+				  @case	#'I':
+					* -TI
+					addq.w	#1,a2
+					st.b	＠TI_Option(a6)
+					bsr	?_GetNum
+					tst.l	d0
+					ble	ERROR_TI_Param
+					cmpi.l	#10000,d0
+					bgt	ERROR_TI_Param
+					move.l	d0,＠TI_Param(a6)
+					@break;
+				  @case	#'E':
+					* -TE
+					addq.w	#1,a2
+					st.b	＠TE_Option(a6)
+					bsr	?_GetNum
+					tst.l	d0
+					ble	ERROR_TE_Param
+					cmpi.l	#10000,d0
+					bgt	ERROR_TE_Param
+					move.l	d0,＠TE_Param(a6)
+					@break;
+				  @case	#'W':
+					* -TW
+					addq.w	#1,a2
+					st.b	＠TW_Option(a6)
+					bsr	?_GetNum
+					tst.l	d0
+					ble	ERROR_TW_Param
+					cmpi.l	#10000,d0
+					bgt	ERROR_TW_Param
+					move.l	d0,＠TW_Param(a6)
+					@break;
+				}
+				@break;
+			  @case	#'C':
+				* -C
+				st.b	＠C_Option(a6)
+				bsr	?_GetNum
+				cmpi.l	#MINCDROMCacheBufSize,d0
+				blt	ERROR_C_Param
+				cmpi.l	#MAXCDROMCacheBufSize,d0
+				bgt	ERROR_C_Param
+				move.l	d0,＠C_Param(a6)
+				@break;
+			  @case	#'A':
+				* -A
+				move.b	(a2),d0
+				ToUpper	d0
+				@switch [ d0 ].b {
+				  @case	#'A':
+					* -AA
+					addq.w	#1,a2
+					move.b	(a2),d0
+					@switch [ d0 ].b {
+					  @case	#'0':
+						* -AA0
+						addq.w	#1,a2
+						clr.b	＠ReqSendPlayAudioAdr1(a6)
+						st.b	＠ReqSendPlayAudioAdr0(a6)
+						@break;
+					  @case	#'1':
+						* -AA1
+						addq.w	#1,a2
+						st.b	＠ReqSendPlayAudioAdr1(a6)
+						@break;
+					  @default:
+						st.b	＠ReqSendPlayAudioAdr1(a6)
+						@break;
+					}
+					@break;
+				}
+				@break;
+			  @default:
+				bra	?_Err
+			}
+			bra	?_Next
+
+		  ?_e::
+			bra	?_Quit
+
+		  ?_Err::
+			bra	ERROR_CMD
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		  ?_GetNum::
+			move.l	d1,-(sp)
+			moveq.l	#0,d0
+			@do {
+				moveq.l	#0,d1
+				move.b	(a2)+,d1
+				subi.b	#'0',d1
+				@break.cs;
+				cmpi.b	#9+1,d1
+				@break.cc;
+				add.l	d0,d0
+				move.l	d0,-(sp)
+				lsl.l	#2,d0
+				add.l	(sp)+,d0
+				add.l	d1,d0
+			} @while.t;
+			subq.w	#1,a2
+			move.l	(sp)+,d1
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	CMD2( void );
+*
+*		コマンドライン追加解析
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ CMD2 ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			move.l	＠CmdSCSI_ID(a6),d0
+			tst.w	d0
+			@ifmi	{
+				move.l	#-1,＠CmdSCSI_ID(a6)
+			}
+
+			tst.w	＠CmdDrvCnt(a6)
+			@ifne	{
+				tst.b	＠Z_Option(a6)
+				@ifcl	{
+					tst.l	＠CmdSCSI_ID(a6)
+					@ifpl	{
+						tst.b	＠ReqUnkillDriver(a6)
+						bst	ERROR_IDandDRVandUnkill
+					}
+				}
+				bra	?_Quit
+			}
+
+			tst.l	＠CmdSCSI_ID(a6)
+			bmi	?_Quit
+
+			tst.b	＠ReqUnkillDriver(a6)
+			@ifeq	{
+				tst.b	＠ReqRelease(a6)
+				@ifeq	{
+					tst.b	＠ReqForceKillDriver(a6)
+					@ifcl	{
+						st.b	＠ReqPrintStatus(a6)
+					}
+				}
+			}
+
+		  ?_Do::
+			bsr	MakeID2Drive
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	MakeID2Drive( void );
+*
+*		SCSI IDをドライブ名化する。
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ MakeID2Drive ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			clr.w	＠CmdDrvCnt(a6)
+
+			moveq.l	#0,d7
+			move.l	＠CmdSCSI_ID(a6),d0
+			move.b	d0,d7
+			andi.b	#$0f,d7
+			swap	d0
+			lsl.b	#4,d0
+			or.b	d0,d7
+			rol.w	#8,d7
+			lea	＠CmdDrv(a6),a1
+
+		  ?_lp::
+			lea	＠DrvSCSIIDTable(a6),a0
+			moveq.l	#0,d5
+			@repeat [ d6, #26-1 ].q {
+				addq.w	#2,a0
+				cmp.w	(a0)+,d7
+				beq	?_Found
+				addq.b	#1,d5
+			}
+			bra	?_lp_e
+
+		  ?_Found::
+			move.w	-4(a0),＠FormatType(a6)
+			moveq.l	#'A',d0
+			add.b	d5,d0
+			move.b	d0,(a1)+
+			addq.w	#1,＠CmdDrvCnt(a6)
+			addq.b	#1,d7
+			bra	?_lp
+
+		  ?_lp_e::
+			clr.b	(a1)
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	MakeID2Drive2( void );
+*
+*		SCSIでないドライブをドライブ名化する。
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ MakeID2Drive2 ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			move.w	#SDD_FormatType_ERROR,＠FormatType(a6)
+			clr.w	＠CmdDrvCnt(a6)
+			lea	＠CmdDrv(a6),a1
+
+		  ?_lp::
+			lea	＠DrvSCSIIDTable(a6),a0
+			moveq.l	#0,d5
+			@repeat [ d6, #26-1 ].q {
+				addq.w	#2,a0
+				move.w	(a0)+,d0
+				andi.w	#$f000,d0
+				cmpi.w	#$f000,d0	* LUN対策
+				@ifeq	{
+					moveq.l	#'A',d0
+					add.b	d5,d0
+					move.b	d0,(a1)+
+					addq.w	#1,＠CmdDrvCnt(a6)
+				}
+				addq.b	#1,d5
+			}
+			clr.b	(a1)
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	MakeAST2Drive( void );
+*
+*		"*:"をパーティション数だけの"@:"に置換する。
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ MakeAST2Drive ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+			ToSuper
+
+			moveq.l	#0,d1
+			moveq.l	#SDDCALL_CalibrateSDD,d0
+			jsr	__DEVD_HOOK
+			swap	d0
+			tst.w	d0
+			@ifmi	{
+				moveq.l	#1,d0
+			} @else {
+				ror.w	#8,d0
+				andi.w	#$ff,d0
+				@ifeq	{
+					moveq.l	#1,d0
+				}
+			}
+			move.w	d0,＠CmdDrvCnt(a6)
+			subq.w	#1,d0
+			lea	＠CmdDrv(a6),a1
+			@repeat	[ d0 ].w {
+				move.b	#'@',(a1)+
+			}
+			clr.b	(a1)
+
+		  ?_Quit::
+			ToUser
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	SetIgnoreDOSERR( void );
+*
+*		DOSのエラー処理を封じる。
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ SetIgnoreDOSERR ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			ToSuper
+
+			lea	?_Ignore(pc),a0
+			move.l	a0,($00b8.w)
+
+		  ?_Quit::
+			ToUser
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		  ?_Ignore::
+			move.w	#2,d7
+			rte
+
+		}
+
+
+*************************************************************************
+
+
+*	void	RestoreDOSERR( void );
+*
+*		DOSのエラー処理を元に戻す。
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ RestoreDOSERR ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			ToSuper
+
+			move.l	＠DOSERRVectorKeep(a6),($00b8.w)
+
+		  ?_Quit::
+			ToUser
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	CutSubst( void );
+*
+*		SUBSTされているドライブを全て解除する。
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ CutSubst ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			bsr	SetIgnoreDOSERR
+
+			DOS	_CURDRV
+			move.w	d0,-(sp)
+
+			moveq.l	#0,d5
+			lea	＠SUBSTKeepBuf(a6),a1
+			@repeat [ d6, #26-1 ].q {
+				* ドライブ名作成
+				move.l	#$413a0000,-(sp)	* 'A:',0
+				add.b	d5,(sp)
+				move.l	sp,a2
+
+				* 元情報保存
+				pea	ＳSUB_Name(a1)
+				move.l	a2,-(sp)
+				clr.w	-(sp)
+				DOS	_ASSIGN
+				lea	10(sp),sp
+				move.l	d0,ＳSUB_MD(a1)
+
+				* 各状態の解除
+				@switch [ d0 ].l {
+				  @case	#$40:
+					move.l	#$413a5c00,-(sp)	* 'A:\',0
+					add.b	d5,(sp)
+					move.l	sp,-(sp)
+					DOS	_CHDIR
+					addq.w	#8,sp
+					@break;
+				  @case	#$50:
+				  @case	#$60:
+					move.l	a2,-(sp)
+					move.w	#4,-(sp)
+					DOS	_ASSIGN
+					addq.w	#6,sp
+					@break;
+				}
+
+				* Next
+				addq.w	#4,sp
+				addq.w	#1,d5
+				lea	SizeOfＳSUB(a1),a1
+			}
+
+			DOS	_CHGDRV
+			addq.w	#2,sp
+
+			bsr	RestoreDOSERR
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	RemainSubst( void );
+*
+*		解除したSUBSTを元に戻す。
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ RemainSubst ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			bsr	SetIgnoreDOSERR
+
+			DOS	_CURDRV
+			move.w	d0,-(sp)
+
+			moveq.l	#0,d5
+			lea	＠SUBSTKeepBuf(a6),a1
+			@repeat [ d6, #26-1 ].q {
+				* ドライブ名作成
+				move.l	#$413a0000,-(sp)	* 'A:',0
+				add.b	d5,(sp)
+				move.l	sp,a2
+
+				* 各状態の復活
+				move.l	ＳSUB_MD(a1),d0
+				@switch [ d0 ].l {
+				  @case	#$40:
+					pea	ＳSUB_Name(a1)
+					DOS	_CHDIR
+					addq.w	#4,sp
+					@break;
+				  @case	#$50:
+				  @case	#$60:
+					move.w	d0,-(sp)
+					pea	ＳSUB_Name(a1)
+					move.l	a2,-(sp)
+					move.w	#1,-(sp)
+					DOS	_ASSIGN
+					lea	12(sp),sp
+					@break;
+				}
+
+				* Next
+				addq.w	#4,sp
+				addq.w	#1,d5
+				lea	SizeOfＳSUB(a1),a1
+			}
+
+			DOS	_CHGDRV
+			addq.w	#2,sp
+
+			bsr	RestoreDOSERR
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	SetForceEject( void );
+*
+*		強制イジェクトフラグを設定する。
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ SetForceEject ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			ToSuper
+
+			* 強制イジェクトフラグを設定
+			tst.b	＠ReqForceEject0(a6)
+			@ifst	{
+				moveq.l	#0,d1
+				move.l	＠KeepDEVHPtr(a6),a1
+				lea	__DEVD_HOOK-__SUSIEDEVH(a1),a1
+				moveq.l	#SDDCALL_SetForceEjectSDD,d0
+				jsr	(a1)
+			}
+			tst.b	＠ReqForceEject1(a6)
+			@ifst	{
+				moveq.l	#1,d1
+				move.l	＠KeepDEVHPtr(a6),a1
+				lea	__DEVD_HOOK-__SUSIEDEVH(a1),a1
+				moveq.l	#SDDCALL_SetForceEjectSDD,d0
+				jsr	(a1)
+			}
+
+		  ?_Quit::
+			ToUser
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	SetForceProtect( void );
+*
+*		強制プロテクトフラグを設定する。
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ SetForceProtect ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			ToSuper
+
+			* 強制プロテクトフラグを設定
+			tst.b	＠ReqForceProtect0(a6)
+			@ifst	{
+				moveq.l	#0,d1
+				move.l	＠KeepDEVHPtr(a6),a1
+				lea	__DEVD_HOOK-__SUSIEDEVH(a1),a1
+				moveq.l	#SDDCALL_SetForceProtectSDD,d0
+				jsr	(a1)
+			}
+			tst.b	＠ReqForceProtect1(a6)
+			@ifst	{
+				moveq.l	#1,d1
+				move.l	＠KeepDEVHPtr(a6),a1
+				lea	__DEVD_HOOK-__SUSIEDEVH(a1),a1
+				moveq.l	#SDDCALL_SetForceProtectSDD,d0
+				jsr	(a1)
+			}
+
+		  ?_Quit::
+			ToUser
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	SetSpOptionBuf( void );
+*
+*		特殊オプションバッファを設定する。
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ SetSpOptionBuf ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			lea	＠SpOptionBuf(a6),a1
+
+			* 98用オプション設定
+			tst.b	＠98C_Option(a6)
+			@ifst	{
+				move.l	#'98:C',(a1)+
+				move.l	＠98C_Param(a6),(a1)+
+			}
+
+			* SCSI IDオプション設定
+			moveq.l	#0,d0
+			move.l	＠CmdSCSI_ID(a6),d0
+			@ifpl	{
+				move.l	#'SID:',(a1)+
+				move.l	d0,(a1)+
+			}
+
+			* Force Ejectオプション設定
+			tst.b	＠ReqForceEject1(a6)
+			@ifst	{
+				moveq.l	#1,d0
+				move.l	#'EJE:',(a1)+
+				move.l	d0,(a1)+
+			}
+			tst.b	＠ReqForceEject0(a6)
+			@ifst	{
+				moveq.l	#0,d0
+				move.l	#'EJE:',(a1)+
+				move.l	d0,(a1)+
+			}
+
+			* Force Protectオプション設定
+			tst.b	＠ReqForceProtect1(a6)
+			@ifst	{
+				moveq.l	#1,d0
+				move.l	#'WPR:',(a1)+
+				move.l	d0,(a1)+
+			}
+			tst.b	＠ReqForceProtect0(a6)
+			@ifst	{
+				moveq.l	#0,d0
+				move.l	#'WPR:',(a1)+
+				move.l	d0,(a1)+
+			}
+
+			* Wait Busyオプション設定
+			tst.b	＠ReqWaitBusy1(a6)
+			@ifst	{
+				moveq.l	#1,d0
+				move.l	#'BSY:',(a1)+
+				move.l	d0,(a1)+
+			}
+			tst.b	＠ReqWaitBusy0(a6)
+			@ifst	{
+				moveq.l	#0,d0
+				move.l	#'BSY:',(a1)+
+				move.l	d0,(a1)+
+			}
+
+			* Hard Verifyオプション設定
+			tst.b	＠ReqHardVerify3(a6)
+			@ifst	{
+				moveq.l	#3,d0
+				move.l	#'HVF:',(a1)+
+				move.l	d0,(a1)+
+			}
+			tst.b	＠ReqHardVerify2(a6)
+			@ifst	{
+				moveq.l	#2,d0
+				move.l	#'HVF:',(a1)+
+				move.l	d0,(a1)+
+			}
+			tst.b	＠ReqHardVerify1(a6)
+			@ifst	{
+				moveq.l	#1,d0
+				move.l	#'HVF:',(a1)+
+				move.l	d0,(a1)+
+			}
+			tst.b	＠ReqHardVerify0(a6)
+			@ifst	{
+				moveq.l	#0,d0
+				move.l	#'HVF:',(a1)+
+				move.l	d0,(a1)+
+			}
+
+			* 高速認識オプション設定
+			tst.b	＠ReqAllowRezeroUnit1(a6)
+			@ifst	{
+				moveq.l	#1,d0
+				move.l	#'REZ:',(a1)+
+				move.l	d0,(a1)+
+			}
+			tst.b	＠ReqAllowRezeroUnit0(a6)
+			@ifst	{
+				moveq.l	#0,d0
+				move.l	#'REZ:',(a1)+
+				move.l	d0,(a1)+
+			}
+
+			* Read/Write EXTオプション設定
+			tst.b	＠ReqTestRWEXT1(a6)
+			@ifst	{
+				moveq.l	#1,d0
+				move.l	#'RWE:',(a1)+
+				move.l	d0,(a1)+
+			}
+			tst.b	＠ReqTestRWEXT0(a6)
+			@ifst	{
+				moveq.l	#0,d0
+				move.l	#'RWE:',(a1)+
+				move.l	d0,(a1)+
+			}
+
+			* Eject監視間隔オプション設定
+			tst.b	＠TE_Option(a6)
+			@ifst	{
+				move.l	#'TEJ:',(a1)+
+				move.l	＠TE_Param(a6),(a1)+
+			}
+
+			* リトライ待ち時間オプション設定
+			tst.b	＠TW_Option(a6)
+			@ifst	{
+				move.l	#'TWA:',(a1)+
+				move.l	＠TW_Param(a6),(a1)+
+			}
+
+			* Insert監視間隔オプション設定
+			tst.b	＠TI_Option(a6)
+			@ifst	{
+				move.l	#'TIN:',(a1)+
+				move.l	＠TI_Param(a6),(a1)+
+			}
+
+			* Resourceオプション設定
+			tst.b	＠ReqBrowseResource1(a6)
+			@ifst	{
+				moveq.l	#1,d0
+				move.l	#'BRS:',(a1)+
+				move.l	d0,(a1)+
+			}
+			tst.b	＠ReqBrowseResource0(a6)
+			@ifst	{
+				moveq.l	#0,d0
+				move.l	#'BRS:',(a1)+
+				move.l	d0,(a1)+
+			}
+
+			* PlayAudioオプション設定
+			tst.b	＠ReqSendPlayAudioAdr1(a6)
+			@ifst	{
+				moveq.l	#1,d0
+				move.l	#'PAA:',(a1)+
+				move.l	d0,(a1)+
+			}
+			tst.b	＠ReqSendPlayAudioAdr0(a6)
+			@ifst	{
+				moveq.l	#0,d0
+				move.l	#'PAA:',(a1)+
+				move.l	d0,(a1)+
+			}
+
+			clr.l	(a1)
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	GetSpOptionBuf( void );
+*
+*		特殊オプションバッファのデータを解析する。
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ GetSpOptionBuf ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			lea	＠SpOptionBuf(a6),a1
+			@do {
+				move.l	(a1)+,d0
+				@break.eq;
+				@switch [ d0 ].l {
+				  @case	#'SID:':
+					move.l	(a1),d0
+					move.l	＠CmdSCSI_ID(a6),d1
+					@ifmi	{
+						move.l	d0,d1
+					}
+					move.w	＠CmdSCSI_LUN(a6),d0
+					@ifpl	{
+						swap	d0
+						move.w	d1,d0
+						move.l	d0,d1
+					} @else {
+						move.l	d1,d0
+						swap	d0
+						move.w	d0,＠CmdSCSI_LUN(a6)
+					}
+					move.l	d1,＠CmdSCSI_ID(a6)
+					@break;
+				  @case	#'EJE:':
+					tst.l	(a1)
+					sst.b	＠Status_E(a6)
+					@break;
+				  @case	#'WPR:':
+					tst.l	(a1)
+					sst.b	＠Status_W(a6)
+					@break;
+				  @case	#'HVF:':
+					move.l	(a1),d0
+					move.b	d0,＠Status_V(a6)
+					@break;
+				  @case	#'REZ:':
+					tst.l	(a1)
+					sst.b	＠Status_H(a6)
+					@break;
+				  @case	#'BSY:':
+					tst.l	(a1)
+					sst.b	＠Status_B(a6)
+					@break;
+				  @case	#'TEJ:':
+					move.l	(a1),＠Status_TE(a6)
+					@break;
+				  @case	#'TWA:':
+					move.l	(a1),＠Status_TW(a6)
+					@break;
+				  @case	#'TIN:':
+					move.l	(a1),＠Status_TI(a6)
+					@break;
+				  @case	#'BRS:':
+					tst.l	(a1)
+					sst.b	＠Status_RB(a6)
+					@break;
+				}
+				addq.w	#4,a1
+			} @while.t;
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	ClrSpOptionBuf( void );
+*
+*		特殊オプションバッファのデータをクリアする。
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ ClrSpOptionBuf ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			lea	＠SpOptionBuf(a6),a1
+			clr.l	(a1)
+
+			clr.b	＠Status_E(a6)
+			clr.b	＠Status_W(a6)
+			clr.b	＠Status_V(a6)
+			clr.b	＠Status_B(a6)
+			clr.b	＠Status_H(a6)
+			clr.l	＠Status_TI(a6)
+			clr.l	＠Status_TE(a6)
+			clr.l	＠Status_TW(a6)
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	REPLACEFREEDRIVE( void );
+*
+*		＠CmdDrvの"@:"を空きドライブに置き換える。
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ REPLACEFREEDRIVE ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			* 現在の接続ドライブを埋める
+			ToSuper
+			lea	＠FreeDriveTable(a6),a1
+			lea	＠SUBSTKeepBuf(a6),a2
+			moveq.l	#0,d7
+			@repeat [ d6, #26-1 ].q {
+				pea	＠DINF(a6)
+				move.l	d7,-(sp)
+				jsr	__AskDrive
+				addq.w	#8,sp
+				cmpi.l	#-1,d0
+				@ifne	{
+					st.b	(a1)
+				}
+				move.l	ＳSUB_MD(a2),d0
+				@switch [ d0 ].l {
+				  @case #$50:
+				  @case #$60:
+					st.b	(a1)
+				}
+				addq.w	#1,a1
+				lea	SizeOfＳSUB(a2),a2
+				addq.b	#1,d7
+			}
+			ToUser
+
+			* @:を置き換える
+			lea	＠CmdDrv(a6),a2
+			@do {
+				move.b	(a2),d0
+				@break.eq;
+				cmpi.b	#'@',d0
+				bne	?_Next
+
+				lea	＠FreeDriveTable(a6),a1
+				moveq.l	#0,d7
+				@repeat [ d6, #26-1 ].q {
+					tst.b	(a1)
+					@ifcl	{
+						st.b	(a1)
+						addi.b	#'A',d7
+						move.b	d7,(a2)
+						bra	?_Next
+					}
+					addq.w	#1,a1
+					addq.b	#1,d7
+				}
+				bra	ERROR_NOFREEDRIVE
+			  ?_Next::
+				addq.w	#1,a2
+			} @while.t;
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+
+*************************************************************************
+
+
+*	void	ASKKEEP( void );
+*
+*		常駐チェック
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ ASKKEEP ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			tst.w	＠CmdDrvCnt(a6)
+			beq	?_Quit
+
+			ToSuper
+
+			pea	＠DINF(a6)
+			moveq.l	#0,d0
+			move.b	＠CmdDrv(a6),d0
+			subi.b	#'A',d0
+			move.l	d0,-(sp)
+			jsr	__AskDrive
+			addq.w	#8,sp
+			tst.l	d0
+			bmi	?_NonKeep
+
+			lea	＠DINF(a6),a2
+			move.l	DINF_DEVHPtr(a2),a3
+			move.l	DINF_XDPBPtr(a2),a4
+			lea	DEVH_Name(a3),a0
+			lea	DEVH_Name+__SUSIEDEVH,a1
+			cmpm.l	(a0)+,(a1)+
+			bne	?_NonKeep
+			cmpm.l	(a0)+,(a1)+
+			bne	?_NonKeep
+
+		  ?_Keep::
+			move.l	a3,＠KeepDEVHPtr(a6)
+			st.b	＠IsKeep(a6)
+			bra	?_e
+
+		  ?_NonKeep::
+			clr.b	＠IsKeep(a6)
+			bra	?_e
+
+		  ?_e::
+			ToUser
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	INSTALL( void );
+*
+*		常駐処理
+*		in	なし
+*		out	帰らない。_KEEPPRする。
+
+
+		@xproc	[ INSTALL ] {
+
+			ToSuper
+
+			tst.b	(DeviceInstalled)
+			@ifst	{
+				st.b	＠ReqAllowUnconnect0(a6)
+			}
+			tst.b	＠ReqAllowUnconnect1(a6)
+			@ifst	{
+				clr.b	＠ReqAllowUnconnect0(a6)
+			}
+			tst.b	＠ReqAllowUnconnect0(a6)
+			@ifcl	{
+				st.b	＠ReqAllowUnconnect1(a6)
+			}
+
+			tst.w	＠CmdDrvCnt(a6)
+			@ifeq	{
+				tst.l	＠CmdSCSI_ID(a6)
+				bmi	PRINTALLSTATUS
+				tst.b	＠ReqUnkillDriver(a6)
+				bst	ERROR_NODRIVE_K
+				bra	ERROR_NODRIVE
+			} @else {
+				tst.b	＠Z_Option(a6)
+				@ifcl	{
+					bsr	ASKKEEP
+					tst.b	＠IsKeep(a6)
+					bst	PRINTSTATUS
+				}
+			}
+
+			cmpi.b	#'*',＠CmdDrv(a6)
+			@ifeq	{
+				cmpi.w	#1,＠CmdDrvCnt(a6)
+				bne	ERROR_ASTDRIVE
+			}
+
+			tst.b	＠ReqAllowUnconnect0(a6)
+			@ifst	{
+				bsr	AskSCSIConnect
+				tst.l	d0
+				bne	ERROR_UNCONNECTED
+			}
+
+			tst.b	＠ReqUnkillDriver(a6)
+			@ifcl	{
+				tst.b	＠Z_Option(a6)
+				@ifcl	{
+					tst.l	＠CmdSCSI_ID(a6)
+					@ifmi	{
+						tst.w	＠CmdDrvCnt(a6)
+						bne	PRINTSTATUS
+					}
+				}
+				bsr	KillDriver
+				tst.l	d0
+*				bst	ERROR_KEPT
+				bst	PRINTSTATUS
+			}
+
+			bsr	ClrSpOptionBuf
+			bsr	SetSpOptionBuf
+			lea	＠SpOptionBuf(a6),a1
+			moveq.l	#SDDCALL_SetSpecialOptionSDD,d0
+			jsr	__DEVD_HOOK
+
+			cmpi.b	#'*',＠CmdDrv(a6)
+			@ifeq	{
+				bsr	MakeAST2Drive
+			}
+			bsr	REPLACEFREEDRIVE
+
+			bsr	ASKKEEP
+			tst.b	＠IsKeep(a6)
+*			bst	ERROR_KEPT
+			@ifst	{
+				tst.b	＠ReqForceKillDriver(a6)
+				bcl	PRINTSTATUS
+			}
+
+			tst.l	＠CmdSCSI_ID(a6)
+			bmi	ERROR_NOSCSIID
+
+			DOS	_FFLUSH
+
+			lea	＠CmdDrv(a6),a2
+			@do {
+				moveq.l	#0,d0
+				move.b	(a2),d0
+				@break.eq;
+				pea	＠DINF(a6)
+				subi.b	#'A',d0
+				move.l	d0,-(sp)
+				jsr	__AskDrive
+				addq.w	#8,sp
+				cmpi.l	#-2,d0
+				beq	ERROR_NGDRIVE
+				cmpi.l	#-4,d0
+				beq	ERROR_NGDRIVE
+				addq.w	#1,a2
+			} @while.t;
+
+			move.l	＠CmdSCSI_ID(a6),d1
+			move.w	＠CmdDrvCnt(a6),d2
+			moveq.l	#0,d3
+			tst.b	＠ReqHardVerify1(a6)
+			@ifst	{
+				bset.l	#0,d3
+			}
+			tst.b	＠ReqHardVerify2(a6)
+			@ifst	{
+				bset.l	#3,d3
+			}
+			tst.b	＠ReqHardVerify3(a6)
+			@ifst	{
+				bset.l	#0,d3
+				bset.l	#3,d3
+			}
+			tst.b	＠ReqTestRWEXT1(a6)
+			@ifst	{
+				bset.l	#1,d3
+			}
+			tst.b	＠ReqWaitBusy1(a6)
+			@ifst	{
+				bset.l	#2,d3
+			}
+			lea	＠CmdDrv(a6),a1
+			jsr	InstallSDD
+			tst.l	d0
+			bmi	ERROR_INSTALL
+			move.l	#__SUSIEDEVH,＠KeepDEVHPtr(a6)
+
+ .if 0
+			bsr	SetForceEject
+			bsr	SetForceProtect
+ .endif
+
+			ToUser
+
+			tst.b	＠SI_Option(a6)
+			@ifcl	{
+				tst.b	＠I_Option(a6)
+				@ifst	{
+					bsr	PrintStatus2Start
+					bsr	PrintStatus2
+				} @else {
+					bsr	PrintStatusStart
+					bsr	PrintStatus
+				}
+			}
+			bsr	PrintInstall
+
+		  ?_Keep::
+			move.b	＠MediaID(a6),d0
+			@switch [ d0 ].b {
+			  @case #$F5:
+				tst.l	＠C_Param(a6)
+				@ifeq	{
+					move.l	#16,＠C_Param(a6)
+				}
+				@break;
+			}
+
+			bsr	RemainSubst
+
+			tst.b	(DeviceInstalled)
+			bst	DDD_INSTALL_OK_Quit
+
+			* この先常駐終了まで割り込み禁止
+			ToSuper
+			ori.w	#$700,sr
+
+			lea	KEEPEND,a1
+			lea	PSTART,a2
+			suba.l	a2,a1
+			move.l	＠C_Param(a6),d0
+			@ifne	{
+				jsr	SetBufferSize
+				add.l	d0,a1
+			}
+			clr.w	-(sp)
+			move.l	a1,-(sp)
+			DOS	_KEEPPR
+
+		}
+
+
+*************************************************************************
+
+
+*	void	BusReset( void );
+*
+*		SCSIバスリセットを行なう。
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ BusReset ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			SCSI	_S_RESET
+
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	AskSCSIConnect( void );
+*
+*		SCSI機器の接続を調べる。
+*		in	なし
+*		out	d0	0で接続OK
+*				1で未接続
+*				2でSUSIE使用不能
+
+
+		@xproc	[ AskSCSIConnect ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+			ToSuper
+
+			move.l	＠CmdSCSI_ID(a6),d4
+			andi.l	#$0007ffff,d4
+			tst.b	＠ReqAllowRezeroUnit1(a6)
+			@ifst	{
+				moveq.l	#1,d3
+				SCSI	_S_REZEROUNIT
+			}
+			SCSI	_S_TESTUNIT
+
+		  ?_RetryTestUnit::
+			SCSI	_S_TESTUNIT
+			tst.l	d0
+			bmi	?_Unconnected
+			@ifne	{
+				tst.b	＠ReqWaitBusy1(a6)
+				@ifst	{
+					@if [ cmpi.l #SCSI_BUSYCODE,d0 ].eq @or
+					    [ cmpi.l #SCSI_REQCODE,d0 ].eq {
+					  ?_RetryTestUnit_Request::
+						moveq.l	#$0e,d3
+						lea	＠SCSI_REQUESTBuf(a6),a1
+						SCSI	_S_REQUEST
+						cmpi.l	#SCSI_BUSYCODE,d0
+						beq	?_RetryTestUnit_Request
+						cmpi.l	#SCSI_REQCODE,d0
+						beq	?_RetryTestUnit_Request
+						tst.l	d0
+						bne	?_Unconnected
+						moveq.l	#0,d0
+						move.b	2(a1),d0
+						andi.w	#$000f,d0
+						beq	?_OKTestUnit
+						cmpi.w	#1,d0
+						beq	?_OKTestUnit
+						cmpi.w	#2,d0
+						beq	?_OKTestUnit
+						cmpi.w	#6,d0
+						beq	?_RetryTestUnit
+						bra	?_Unconnected
+					}
+				}
+			}
+		  ?_OKTestUnit::
+
+		  ?_RetryInquiry::
+			lea	＠SCSI_INQUIRYBuf(a6),a1
+			move.l	#$24,d3
+			SCSI	_S_INQUIRY
+			tst.l	d0
+			bmi	?_Unconnected
+			@ifne	{
+				tst.b	＠ReqWaitBusy1(a6)
+				@ifst	{
+					@if [ cmpi.l #SCSI_BUSYCODE,d0 ].eq @or
+					    [ cmpi.l #SCSI_REQCODE,d0 ].eq {
+					  ?_RetryInquiry_Request::
+						moveq.l	#$0e,d3
+						lea	＠SCSI_REQUESTBuf(a6),a1
+						SCSI	_S_REQUEST
+						cmpi.l	#SCSI_BUSYCODE,d0
+						beq	?_RetryInquiry_Request
+						cmpi.l	#SCSI_REQCODE,d0
+						beq	?_RetryInquiry_Request
+						tst.l	d0
+						bne	?_Unconnected
+						moveq.l	#0,d0
+						move.b	2(a1),d0
+						andi.w	#$000f,d0
+						beq	?_OKInquiry
+						cmpi.w	#1,d0
+						beq	?_OKInquiry
+						cmpi.w	#2,d0
+						beq	?_OKInquiry
+						cmpi.w	#6,d0
+						beq	?_RetryInquiry
+						bra	?_Unconnected
+					}
+				}
+			}
+		  ?_OKInquiry::
+			move.b	0(a1),d0
+			andi.b	#$1f,d0
+			@switch [ d0 ].b {
+			  @case	#$00:
+			  @case	#$05:
+			  @case	#$07:
+				@break;
+			  @default:
+				bra	?_UnusableSUSIE
+			}
+			moveq.l	#0,d1
+			bra	?_e
+
+		  ?_Unconnected::
+			moveq.l	#1,d1
+			bra	?_e
+
+		  ?_UnusableSUSIE::
+			moveq.l	#2,d1
+			bra	?_e
+
+		  ?_e::
+			ToUser
+			move.l	d1,d0
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	KillDriver( void );
+*
+*		すでに常駐しているSCSIドライバを切る。
+*		in	なし
+*		out	d0	最終的にSUSIEが常駐していれば!0
+
+
+		@xproc	[ KillDriver ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+			ToSuper
+
+			* バックアップ
+			lea	＠CmdDrv(a6),a1
+			lea	＠CmdDrvBack(a6),a2
+			StrCpy	(a1)+,(a2)+
+			move.w	＠CmdDrvCnt(a6),＠CmdDrvCntBack(a6)
+
+			* ドライバを切る
+			bsr	MakeID2Drive
+			tst.w	＠CmdDrvCnt(a6)
+			beq	@f
+			moveq.l	#0,d0
+			move.b	＠CmdDrv(a6),d0
+			subi.b	#'A',d0
+			pea	＠DINF(a6)
+			move.l	d0,-(sp)
+			jsr	__AskDrive
+			addq.w	#8,sp
+			move.l	DINF_DEVHPtr+＠DINF(a6),a0
+			lea	DEVH_Name(a0),a0
+			lea	DEVH_Name+__SUSIEDEVH,a1
+			cmpm.l	(a0)+,(a1)+
+			bne	@f
+			cmpm.l	(a0)+,(a1)+
+			bne	@f
+			tst.b	＠ReqForceKillDriver(a6)
+			@ifcl	{
+				moveq.l	#-1,d1
+				bra	?_Skip
+			}
+		  @@:
+			lea	＠CmdDrv(a6),a1
+			@do {
+				moveq.l	#0,d0
+				move.b	(a1)+,d0
+				@break.eq;
+				subi.b	#'A',d0
+				pea	＠DINF(a6)
+				move.l	d0,-(sp)
+				jsr	__UnregistDrive
+				addq.w	#8,sp
+			} @while.t;
+			moveq.l	#0,d1
+
+		  ?_Skip::
+			* バックアップを復元
+			lea	＠CmdDrv(a6),a1
+			lea	＠CmdDrvBack(a6),a2
+			StrCpy	(a2)+,(a1)+
+			move.w	＠CmdDrvCntBack(a6),＠CmdDrvCnt(a6)
+
+			ToUser
+			move.l	d1,d0
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	InitializeKeepSUSIE( void );
+*
+*		常駐している全SUSIEに初期化を与える。
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ InitializeKeepSUSIE ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			ToSuper
+
+			* デバイスドライバ先頭をポイント
+			lea	$6800,a2
+			@repeat [ d0, #($10000-6800)/2-1 ].w {
+				cmpi.l	#'NUL ',(a2)
+				beq	?_Found
+				addq.l	#2,a2
+			}
+			bra	?_e
+
+		  ?_Found::
+			lea	-$0e(a2),a2
+
+			* SUSIEを探す
+			@do {
+				cmpi.l	#$012a5355,$0e(a2)	* $01,'*SU'
+				bne	?_NotSUSIE
+				cmpi.l	#$5349452a,$12(a2)	* 'SIE*'
+				bne	?_NotSUSIE
+
+				* SUSIEに初期化を送る
+				lea	__DEVD_HOOK-__SUSIEDEVH(a2),a1
+				moveq.l	#0,d1
+				moveq.l	#SDDCALL_CalibrateSDD,d0
+				jsr	(a1)
+
+			  ?_NotSUSIE::
+				* リンクを辿って探す
+				move.l	DEVH_NextDEVHPtr(a2),d0
+				@break.mi;
+				move.l	d0,a2
+			} @while.t;
+
+		  ?_e::
+			ToUser
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	CHANGESTATUS( void );
+*
+*		常駐変更処理
+*		in	なし
+*		out	帰らない。_EXITする。
+
+
+		@xproc	[ CHANGESTATUS ] {
+
+			ToSuper
+
+			tst.w	＠CmdDrvCnt(a6)
+			beq	ERROR_NODRIVE
+
+			bsr	ASKKEEP
+			tst.b	＠IsKeep(a6)
+			bcl	ERROR_NONKEEP
+
+			DOS	_FFLUSH
+
+			bsr	ClrSpOptionBuf
+			lea	＠SpOptionBuf(a6),a1
+			move.l	＠KeepDEVHPtr(a6),a0
+			lea	__DEVD_HOOK-__SUSIEDEVH(a0),a0
+			moveq.l	#SDDCALL_GetSpecialOptionSDD,d0
+			jsr	(a0)
+			bsr	GetSpOptionBuf
+			bsr	SetSpOptionBuf
+			lea	＠SpOptionBuf(a6),a1
+			move.l	＠KeepDEVHPtr(a6),a0
+			lea	__DEVD_HOOK-__SUSIEDEVH(a0),a0
+			moveq.l	#SDDCALL_SetSpecialOptionSDD,d0
+			jsr	(a0)
+			moveq.l	#SDDCALL_CalibrateSDD,d0
+			jsr	(a0)
+
+ .if 0
+			bsr	SetForceEject
+			bsr	SetForceProtect
+ .endif
+
+			ToUser
+
+			tst.b	＠SI_Option(a6)
+			@ifcl	{
+				tst.b	＠I_Option(a6)
+				@ifst	{
+					bsr	PrintStatus2Start
+					bsr	PrintStatus2
+				} @else {
+					bsr	PrintStatusStart
+					bsr	PrintStatus
+				}
+			}
+
+ .if 0
+			pea	[ "CHANGESTATUS:",13,10,0 ](pc)
+			DOS	_PRINT
+			addq.w	#4,sp
+ .endif
+
+			bsr	RemainSubst
+
+			tst.b	(DeviceInstalled)
+			bst	DDD_INSTALL_Err_Quit
+
+			DOS	_EXIT
+		}
+
+
+*************************************************************************
+
+
+*	void	PRINTSTATUS( void );
+*
+*		ステータス表示処理
+*		in	なし
+*		out	帰らない。_EXITする。
+
+
+		@xproc	[ PRINTSTATUS ] {
+
+			ToSuper
+
+			tst.w	＠CmdDrvCnt(a6)
+			@ifeq	{
+				tst.l	＠CmdSCSI_ID(a6)
+				bmi	PRINTALLSTATUS
+				bra	ERROR_NONKEEP
+			}
+			cmpi.b	#'*',＠CmdDrv(a6)
+			beq	ERROR_ASTDRIVE
+
+			bsr	ASKKEEP
+			tst.b	＠IsKeep(a6)
+			bcl	ERROR_NONKEEP
+
+			DOS	_FFLUSH
+
+			bsr	ClrSpOptionBuf
+			lea	＠SpOptionBuf(a6),a1
+			move.l	＠KeepDEVHPtr(a6),a0
+			lea	__DEVD_HOOK-__SUSIEDEVH(a0),a0
+			moveq.l	#SDDCALL_GetSpecialOptionSDD,d0
+			jsr	(a0)
+			bsr	GetSpOptionBuf
+			bsr	SetSpOptionBuf
+			lea	＠SpOptionBuf(a6),a1
+			move.l	＠KeepDEVHPtr(a6),a0
+			lea	__DEVD_HOOK-__SUSIEDEVH(a0),a0
+			moveq.l	#SDDCALL_SetSpecialOptionSDD,d0
+			jsr	(a0)
+			moveq.l	#SDDCALL_CalibrateSDD,d0
+			moveq.l	#0,d1
+			jsr	(a0)
+ .if 0
+			bsr	SetForceEject
+			bsr	SetForceProtect
+ .endif
+
+			ToUser
+
+			tst.b	＠SI_Option(a6)
+			@ifcl	{
+				tst.b	＠I_Option(a6)
+				@ifst	{
+					bsr	PrintStatus2Start
+					bsr	PrintStatus2
+				} @else {
+					bsr	PrintStatusStart
+					bsr	PrintStatus
+				}
+			}
+
+ .if 0
+			pea	[ "PRINTSTATUS:",13,10,0 ](pc)
+			DOS	_PRINT
+			addq.w	#4,sp
+ .endif
+
+			bsr	RemainSubst
+
+			tst.b	(DeviceInstalled)
+			bst	DDD_INSTALL_Err_Quit
+
+			DOS	_EXIT
+		}
+
+
+*************************************************************************
+
+
+*	void	PRINTALLSTATUS( void );
+*
+*		全ステータス表示処理
+*		in	なし
+*		out	帰らない。_EXITする。
+
+
+		@xproc	[ PRINTALLSTATUS ] {
+
+			DOS	_FFLUSH
+
+			tst.b	＠SI_Option(a6)
+			@ifcl	{
+				tst.b	＠I_Option(a6)
+				@ifst	{
+					bsr	PrintStatus2Start
+					bsr	PrintStatusAll2
+				} @else {
+					bsr	PrintStatusStart
+					bsr	PrintStatusAll
+				}
+			}
+
+ .if 0
+			pea	[ "PRINTALLTATUS:",13,10,0 ](pc)
+			DOS	_PRINT
+			addq.w	#4,sp
+ .endif
+
+			bsr	RemainSubst
+
+			tst.b	(DeviceInstalled)
+			bst	DDD_INSTALL_Err_Quit
+
+			DOS	_EXIT
+		}
+
+
+*************************************************************************
+
+
+*	void	RELEASE( void );
+*
+*		常駐解除処理
+*		in	なし
+*		out	帰らない。_EXITする。
+
+
+		@xproc	[ RELEASE ] {
+
+			tst.w	＠CmdDrvCnt(a6)
+			beq	ERROR_NODRIVE
+			cmpi.b	#'*',＠CmdDrv(a6)
+			beq	ERROR_ASTDRIVE
+
+			bsr	ASKKEEP
+			tst.b	＠IsKeep(a6)
+			bcl	ERROR_NONKEEP
+
+			DOS	_FFLUSH
+
+			ToSuper
+
+			move.l	＠KeepDEVHPtr(a6),a1
+			lea	__DEVD_HOOK-__SUSIEDEVH(a1),a1
+			moveq.l	#SDDCALL_AskReleaseSDD,d0
+			jsr	(a1)
+			move.l	d0,d7
+			tst.l	d0
+			bmi	ERROR_UNRELEASABLE
+
+			move.l	＠KeepDEVHPtr(a6),a1
+			lea	__DEVD_HOOK-__SUSIEDEVH(a1),a1
+			moveq.l	#SDDCALL_ReleaseSDD,d0
+			jsr	(a1)
+
+			tst.l	d7
+			@ifeq	{
+				move.l	＠KeepDEVHPtr(a6),a1
+				lea	PSTART-__SUSIEDEVH(a1),a1
+				pea	-$f0(a1)
+				DOS	_MFREE
+				addq.w	#4,sp
+			}
+
+			ToUser
+
+			bsr	PrintRelease
+
+			bsr	RemainSubst
+
+			tst.b	(DeviceInstalled)
+			bst	DDD_INSTALL_Err_Quit
+
+			DOS	_EXIT
+
+		}
+
+
+*************************************************************************
+
+
+*	void	AskSCSIID( void );
+*
+*		ドライブが使用しているSCSI IDを得る。
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ AskSCSIID ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			ToSuper
+
+			lea	＠DrvSCSIIDTable(a6),a5
+
+			moveq.l	#0,d7
+			@repeat [ d6, #26-1 ].q {
+				move.l	#-1,(a5)
+
+				pea	＠DINF(a6)
+				move.l	d7,-(sp)
+				jsr	__AskDrive
+				addq.w	#8,sp
+				tst.l	d0
+				bmi	?_Next
+
+				* ユニット番号を得る
+				move.l	DINF_XDPBPtr+＠DINF(a6),a3
+				move.b	XDPB_UnitNo(a3),3(a5)
+
+				* デバイスヘッダを得る
+				move.l	DINF_DEVHPtr+＠DINF(a6),a2
+
+				* デバイスドライバを判別する
+			  ?_AskSUSIE::
+				cmpi.l	#$012a5355,$0e(a2)	* $01,'*SU'
+				bne	?_AskSUSIE_e
+				cmpi.l	#$5349452a,$12(a2)	* 'SIE*'
+				bne	?_AskSUSIE_e
+				lea	__DEVD_HOOK-__SUSIEDEVH(a2),a1
+				moveq.l	#SDDCALL_AskSDD,d0
+				jsr	(a1)
+				ror.w	#8,d0
+				move.b	d0,2(a5)
+				swap	d0
+				andi.w	#$ff,d0
+				move.w	d0,(a5)
+				bra	?_Next
+			  ?_AskSUSIE_e::
+
+			  ?_IOCTRL_1::
+				move.b	XDPB_MediaID(a3),d0
+				* CD-ROMのMedia ID特殊処理
+				@if [ cmpi.l #$01434452,$0e(a2) ].eq @and	* $01,'CDR'
+				    [ cmpi.l #$4f4d2020,$12(a2) ].eq {		* 'OM  '
+					move.b	#$f5,d0
+				}
+				@switch [ d0 ].b {
+				  @case #$f5:
+				  @case #$f6:
+				  @case #$f7:
+					move.l	#8,-(sp)
+					pea	＠IOCTRLBuf(a6)
+					move.w	d7,d0
+					addq.w	#1,d0
+					move.w	d0,-(sp)
+					move.w	#4,-(sp)
+					DOS	_IOCTRL
+					lea	12(sp),sp
+					tst.l	d0
+					bne	?_IOCTRL_1_e
+					move.b	3+＠IOCTRLBuf(a6),d0
+					ori.b	#$80,d0
+					move.b	d0,2(a5)
+					bra	?_Next
+				}
+			  ?_IOCTRL_1_e::
+
+			  ?_IOCTRL_2::
+				move.b	XDPB_MediaID(a3),d0
+				* CD-ROMのMedia ID特殊処理
+				@if [ cmpi.l #$01434452,$0e(a2) ].eq @and	* $01,'CDR'
+				    [ cmpi.l #$4f4d2020,$12(a2) ].eq {		* 'OM  '
+					move.b	#$f5,d0
+				}
+				@switch [ d0 ].b {
+				  @case #$f5:
+				  @case #$f6:
+				  @case #$f7:
+					pea	＠IOCTRLBuf(a6)
+					move.w	#$8007,-(sp)
+					move.w	d7,d0
+					addq.w	#1,d0
+					move.w	d0,-(sp)
+					move.w	#$0d,-(sp)
+					DOS	_IOCTRL
+					lea	10(sp),sp
+					tst.l	d0
+					bne	?_IOCTRL_2_e
+					move.b	3+＠IOCTRLBuf(a6),d0
+					ori.b	#$80,d0
+					move.b	d0,2(a5)
+					bra	?_Next
+				}
+			  ?_IOCTRL_2_e::
+
+			  ?_AskSxSI::
+				cmpi.l	#$01534348,$0e(a2)	* $01,'SCH'
+				bne	?_AskSxSI_e
+				cmpi.l	#$4449534B,$12(a2)	* 'DISK'
+				bne	?_AskSxSI_e
+				cmpi.l	#'Hero',$18(a2)
+				bne	?_AskSxSI5
+				move.b	$28(a2),d0
+				ori.b	#$80,d0
+				move.b	d0,2(a5)
+				bra	?_Next
+			  ?_AskSxSI_e::
+
+			  ?_AskSxSI5::
+				cmpi.l	#$01534348,$0e(a2)	* $01,'SCH'
+				bne	?_AskSxSI5_e
+				cmpi.l	#$4449534B,$12(a2)	* 'DISK'
+				bne	?_AskSxSI5_e
+				cmpi.l	#'SxSI',$18(a2)
+				bne	?_AskCDROM
+				move.b	$30(a2),d0
+				ori.b	#$80,d0
+				move.b	d0,2(a5)
+				bra	?_Next
+			  ?_AskSxSI5_e::
+
+			  ?_AskCDROM::
+				cmpi.l	#$01434452,$0e(a2)	* $01,'CDR'
+				bne	?_AskCDROM_e
+				cmpi.l	#$4f4d2020,$12(a2)	* 'OM  '
+				bne	?_AskCDROM_e
+				move.l	$0a(a2),a0
+				cmpi.l	#$48e77ffe,$00(a0)	* movem.l d1-d7/a0-a6,-(sp)
+				bne	?_AskCDROM_e
+				cmpi.w	#$4dfa,$04(a0)		* lea.l	?(pc),a6
+				bne	?_AskCDROM_e
+				cmpi.l	#$2a6e0004,$08(a0)	* movea.l $0004(a6),a5
+				@ifeq	{
+					* CDDEV.SYS
+					move.w	$06(a0),d0
+					lea	$06(a0,d0.w),a0
+					move.l	(a0),d0
+					ori.b	#$80,d0
+					move.b	d0,2(a5)
+					bra	?_Next
+				}
+				cmpi.w	#$2a56,$08(a0)		* movea.l (a6),a5
+				@ifeq	{
+					* CDDRV.SYS
+					move.w	$06(a0),d0
+					lea	$06(a0,d0.w),a0
+					move.l	$04(a0),d0
+					ori.b	#$80,d0
+					move.b	d0,2(a5)
+					bra	?_Next
+				}
+			  ?_AskCDROM_e::
+
+			  ?_AskSCHDISK::
+				cmpi.l	#$01534348,$0e(a2)	* $01,'SCH'
+				bne	?_AskSCHDISK_e
+				cmpi.l	#$4449534B,$12(a2)	* 'DISK'
+				bne	?_AskSCHDISK_e
+				moveq.l	#0,d0
+				move.w	$74(a2),d0
+				lea	(a2,d0.l),a0
+				move.b	$61f(a0),d0
+				ori.b	#$80,d0
+				move.b	d0,2(a5)
+				bra	?_Next
+			  ?_AskSCHDISK_e::
+
+			  ?_Other::
+			  ?_Next::
+				addq.w	#4,a5
+				addq.w	#1,d7
+			}
+
+			ToUser
+
+		  ?_Quit::
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	ABORT( void );
+*
+*		アボート処理
+*		in	なし
+*		out	帰らない。_EXITする。
+
+
+		@xproc	[ ABORT ] {
+			lea	BSSSTART,a6
+
+			pea	[ "ABORTしました。",13,10,0 ](pc)
+			DOS	_PRINT
+			addq.w	#4,sp
+
+			bsr	RemainSubst
+
+			tst.b	(DeviceInstalled)
+			bst	DDD_INSTALL_Err_Quit
+
+			DOS	_EXIT
+		}
+
+
+*************************************************************************
+
+
+*	void	ERROR( void );
+*
+*		エラー処理
+*		in	なし
+*		out	帰らない。_EXITする。
+
+
+		@xproc	[ ERROR ] {
+
+		  ?_MEM::
+			lea	[ "実行に必要なメモリが足りません。",13,10,0 ](pc),a1
+			bra	?_PRINT
+
+		  ?_INSTALL::
+			lea	[ "SUSIEがインストールできませんでした。",13,10,0 ](pc),a1
+			bra	?_PRINT
+
+		  ?_KEPT::
+			lea	[ "指定ドライブ（またはSCSI-ID,LUN）にはすでにSUSIEが常駐しています。",13,10,0 ](pc),a1
+			bra	?_PRINT
+
+		  ?_NONKEEP::
+			lea	[ "指定ドライブ（またはSCSI-ID,LUN）にSUSIEが常駐していません。",13,10,0 ](pc),a1
+			bra	?_PRINT
+
+		  ?_NODRIVE::
+			lea	[ "ドライブ名を指定してください。",13,10,0 ](pc),a1
+			bra	?_PRINT
+
+		  ?_NODRIVE_K::
+			lea	[ "指定のSCSI-ID,LUNにはSCSIドライバが登録されていません。",13,10,0 ](pc),a1
+			bra	?_PRINT
+
+		  ?_NOSCSIID::
+			lea	[ "-IDオプションでSCSI-IDを設定してください。",13,10,0 ](pc),a1
+			bra	?_PRINT
+
+		  ?_UNRELEASABLE2::
+			lea	[ "CONFIG.SYSで登録したSUSIEは解除できません。",13,10,0 ](pc),a1
+			bra	?_PRINT
+
+		  ?_NOFREEDRIVE::
+			lea	[ "ドライブの空きがありません。",13,10,0 ](pc),a1
+			bra	?_PRINT
+
+		  ?_SCSICALL::
+			lea	[ "SCSIボードが装着されていません。",13,10,0 ](pc),a1
+			bra	?_PRINT
+
+		  ?_ASTDRIVE::
+			lea	[ "*:は使用できません。",13,10,0 ](pc),a1
+			bra	?_PRINT
+
+		  ?_IDandDRVandUnkill::
+			lea	[ "-IDn -K ?:の形では使用できません。",13,10,0 ](pc),a1
+			bra	?_PRINT
+
+		  ?_TI_Param::
+			lea	[ "-TIの範囲は1～9999です。",13,10,0 ](pc),a1
+			bra	?_PRINT
+
+		  ?_TE_Param::
+			lea	[ "-TEの範囲は1～9999です。",13,10,0 ](pc),a1
+			bra	?_PRINT
+
+		  ?_TW_Param::
+			lea	[ "-TWの範囲は1～9999です。",13,10,0 ](pc),a1
+			bra	?_PRINT
+
+		  ?_C_Param::
+			lea	[ "-Cの範囲は2～32です。",13,10,0 ](pc),a1
+			bra	?_PRINT
+
+		  ?_CMD::
+			lea	＠ErrMesBuf(a6),a0
+			@do {
+				move.b	(a3)+,d0
+				cmpi.b	#' '+1,d0
+				@break.cs;
+				move.b	d0,(a0)+
+			} @while.t;
+			lea	[ ": コマンドラインが異常です。",13,10,0 ](pc),a1
+			StrCpy	(a1)+,(a0)+
+			lea	＠ErrMesBuf(a6),a1
+			bra	?_PRINT
+
+		  ?_UNCONNECTED::
+			move.l	d0,d1
+			lea	＠ErrMesBuf(a6),a0
+			lea	[ "SCSI-ID",0 ](pc),a1
+			StrCpy	(a1)+,(a0)+
+			subq.w	#1,a0
+			moveq.l	#'0',d0
+			add.l	＠CmdSCSI_ID(a6),d0
+			move.b	d0,(a0)+
+			swap	d0
+			cmpi.b	#8,d0
+			@ifcs	{
+				lea	[ ",LUN",0 ](pc),a1
+				StrCpy	(a1)+,(a0)+
+				subq.w	#1,a0
+				andi.b	#$07,d0
+				addi.b	#'0',d0
+				move.b	d0,(a0)+
+			}
+			@switch [ d1 ].b {
+			  @case	#2:
+				lea	[ " はSUSIEで使用できない機器です。",13,10,0 ](pc),a1
+				@break;
+			  @default:
+				lea	[ " は未接続です。",13,10,0 ](pc),a1
+				@break;
+			}
+			StrCpy	(a1)+,(a0)+
+			lea	＠ErrMesBuf(a6),a1
+			bra	?_PRINT
+
+		  ?_NGDRIVE::
+			lea	＠ErrMesBuf(a6),a0
+			move.b	(a2),(a0)+
+			lea	[ ": ドライブがSUSIE用に使用できません。",13,10,0 ](pc),a1
+			StrCpy	(a1)+,(a0)+
+			lea	＠ErrMesBuf(a6),a1
+			bra	?_PRINT
+
+		  ?_UNRELEASABLE::
+			andi.l	#$ff,d0
+			move.l	d0,-(sp)
+			jsr	__GetLDriveNo
+			addq.w	#4,sp
+			moveq.l	#'A',d1
+			add.b	d0,d1
+			lea	＠ErrMesBuf(a6),a0
+			move.b	d1,(a0)+
+			lea	[ "ドライブがSUSIEの管理ではありません。",13,10,0 ](pc),a1
+			StrCpy	(a1)+,(a0)+
+			lea	＠ErrMesBuf(a6),a1
+			bra	?_PRINT
+
+		  ?_PRINT::
+			bsr	PrintMessage
+
+			bsr	RemainSubst
+
+			tst.b	(DeviceInstalled)
+			bst	DDD_INSTALL_Err_Quit
+
+			move.w	#-1,-(sp)
+			DOS	_EXIT2
+		}
+
+
+*************************************************************************
+
+
+*	void	PrintMessage( void );
+*
+*		メッセージ表示
+*		in	a1	メッセージ文字列
+*		out	なし
+
+
+		@xproc	[ PrintMessage ] {
+			@param	[ a1, MessagePtr ].l;
+
+			move.w	#＃STDERR,-(sp)
+			pea	[ "susie.x: ",0 ](pc)
+			DOS	_FPUTS
+			addq.w	#4,sp
+			move.l	MessagePtr,-(sp)
+			DOS	_FPUTS
+			addq.w	#6,sp
+
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	PrintInstall( void );
+*
+*		インストール表示
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ PrintInstall ] {
+
+			lea	[ "常駐しました。",13,10,0 ](pc),a1
+			bsr	PrintMessage
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	PrintRelease( void );
+*
+*		リリース表示
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ PrintRelease ] {
+
+			lea	[ "常駐解除しました。",13,10,0 ](pc),a1
+			bsr	PrintMessage
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	PrintStatusStart( void );
+*
+*		ステータス表示開始
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ PrintStatusStart ] {
+
+			pea	[
+				"Drv Driver       Device Name           [RP] (VEWBH) -TI -TE -TW  Size   Volume             ",13,10
+				"----------------------------------------------------------------------------------------------",13,10
+				0
+			](pc)
+			DOS	_PRINT
+			addq.w	#4,sp
+
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	PrintStatus2Start( void );
+*
+*		ステータス精細表示開始
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ PrintStatus2Start ] {
+
+			pea	[
+				"Drv Driver       Device Name              Used / Capacity       [RP]   Volume",13,10
+				"----------------------------------------------------------------------------------------------",13,10
+				0
+			](pc)
+			DOS	_PRINT
+			addq.w	#4,sp
+
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	PrintStatus( void );
+*
+*		ステータス表示
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ PrintStatus ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			bsr	?_GetSUSIEDeviceInfo
+			bsr	?_Sub
+
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		  ?_GetSUSIEDeviceInfo::
+			ToSuper
+
+			* SUSIEのデバイス情報を得る
+			move.l	＠KeepDEVHPtr(a6),a1
+			lea	__DEVD_HOOK-__SUSIEDEVH(a1),a1
+			moveq.l	#SDDCALL_AskSDD,d0
+			jsr	(a1)
+			moveq.l	#0,d1
+			move.b	d0,d1
+			move.w	d1,＠DrvCnt(a6)
+			rol.w	#8,d0
+			move.l	d1,-(sp)
+			move.w	d0,d1
+			andi.w	#$f0,d1
+			lsr.w	#4,d1
+			swap	d1
+			move.w	d0,d1
+			andi.w	#$0f,d1
+			move.l	d1,＠SCSI_ID(a6)
+			move.l	(sp)+,d1
+			swap	d0
+			tst.w	d0
+			@ifpl	{
+				andi.w	#$ff,d0
+			}
+			move.w	d0,＠FormatType(a6)
+			move.l	a1,＠DPBTablePtr(a6)
+
+			ToUser
+			rts
+
+		  ?_Sub::
+			movem.l	d1-d7/a0-a6,-(sp)
+			ToSuper
+
+			move.l	＠DPBTablePtr(a6),a2
+			move.w	＠DrvCnt(a6),d7
+			subq.w	#1,d7
+			@repeat [ d7 ].w {
+				move.l	#$100,d0
+				move.b	DPBTable_DriveNo(a2),d0
+				pea	＠DINF(a6)
+				move.l	d0,-(sp)
+				jsr	__AskDrive
+				addq.w	#8,sp
+				tst.l	d0
+				@continue.mi;
+				addq.w	#1,d6
+				move.l	DINF_XDPBPtr+＠DINF(a6),a0
+				move.l	a0,＠XDPBPtr(a6)
+				move.b	XDPB_MediaID(a0),＠MediaID(a6)
+				lea	＠MesBuf(a6),a0
+				bsr	?_GetLDriveNo
+				bsr	?_PutDriveID
+				bsr	?_GetDrvCtrl
+				bsr	?_PutDrvCtrl
+				bsr	?_PutOption
+				bsr	?_PutDriveCapaMini
+				bsr	?_PutVolume
+				bsr	?_Disp
+				lea	SizeOf1DPBTable(a2),a2
+			}
+
+			ToUser
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		  ?_Sub2::
+			movem.l	d1-d7/a0-a6,-(sp)
+			ToSuper
+
+			move.l	＠DPBTablePtr(a6),a2
+			move.w	＠DrvCnt(a6),d7
+			subq.w	#1,d7
+			@repeat [ d7 ].w {
+				move.l	#$100,d0
+				move.b	DPBTable_DriveNo(a2),d0
+				pea	＠DINF(a6)
+				move.l	d0,-(sp)
+				jsr	__AskDrive
+				addq.w	#8,sp
+				tst.l	d0
+				@continue.mi;
+				addq.w	#1,d6
+				move.l	DINF_XDPBPtr+＠DINF(a6),a0
+				move.l	a0,＠XDPBPtr(a6)
+				move.b	XDPB_MediaID(a0),＠MediaID(a6)
+				lea	＠MesBuf(a6),a0
+				bsr	?_GetLDriveNo
+				bsr	?_PutDriveID
+				bsr	?_GetDrvCtrl
+				bsr	?_PutDriveCapa
+				bsr	?_PutDrvCtrl
+				bsr	?_PutVolume
+				bsr	?_Disp
+				lea	SizeOf1DPBTable(a2),a2
+			}
+
+			ToUser
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		  ?_Sub3::
+			movem.l	d1-d7/a0-a6,-(sp)
+			ToSuper
+
+			move.l	＠CmdSCSI_ID(a6),＠SCSI_ID(a6)
+			lea	＠CmdDrv(a6),a1
+			@do {
+				tst.l	＠SCSI_ID(a6)
+				@ifmi	{
+					move.w	#SDD_FormatType_X68000,＠FormatType(a6)
+				}
+				moveq.l	#0,d6
+				move.b	(a1)+,d6
+				@break.eq;
+				pea	＠DINF(a6)
+				subi.b	#'A',d6
+				move.l	d6,-(sp)
+				jsr	__AskDrive
+				addq.w	#8,sp
+				tst.l	d0
+				@continue.mi;
+				addq.w	#1,d6
+				move.l	DINF_DEVHPtr+＠DINF(a6),a0
+				move.w	DEVH_Flag(a0),d0
+				move.l	DINF_XDPBPtr+＠DINF(a6),a0
+				move.l	a0,＠XDPBPtr(a6)
+				btst	#13,d0
+				@ifst	{
+					clr.w	-(sp)
+					move.l	sp,-(sp)
+					clr.w	-(sp)
+					move.w	d6,-(sp)
+					move.w	#13,-(sp)
+					DOS	_IOCTRL
+					lea	10(sp),sp
+					move.w	(sp)+,d0
+					move.b	d0,＠MediaID(a6)
+				} @else {
+					move.b	XDPB_MediaID(a0),＠MediaID(a6)
+				}
+				move.l	a1,-(sp)
+				lea	＠MesBuf(a6),a0
+				bsr	?_PutDriveID
+				bsr	?_GetDrvCtrl
+				bsr	?_PutDrvCtrl
+				bsr	?_PutOption
+				bsr	?_PutDriveCapaMini
+				bsr	?_PutVolume
+				bsr	?_Disp
+				move.l	(sp)+,a1
+			} @while.t;
+
+			ToUser
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		  ?_Sub4::
+			movem.l	d1-d7/a0-a6,-(sp)
+			ToSuper
+
+			move.l	＠CmdSCSI_ID(a6),＠SCSI_ID(a6)
+			lea	＠CmdDrv(a6),a1
+			@do {
+				tst.l	＠SCSI_ID(a6)
+				@ifmi	{
+					move.w	#SDD_FormatType_X68000,＠FormatType(a6)
+				}
+				moveq.l	#0,d6
+				move.b	(a1)+,d6
+				@break.eq;
+				pea	＠DINF(a6)
+				subi.b	#'A',d6
+				move.l	d6,-(sp)
+				jsr	__AskDrive
+				addq.w	#8,sp
+				tst.l	d0
+				@continue.mi;
+				addq.w	#1,d6
+				move.l	DINF_DEVHPtr+＠DINF(a6),a0
+				move.w	DEVH_Flag(a0),d0
+				move.l	DINF_XDPBPtr+＠DINF(a6),a0
+				move.l	a0,＠XDPBPtr(a6)
+				btst	#13,d0
+				@ifst	{
+					clr.w	-(sp)
+					move.l	sp,-(sp)
+					clr.w	-(sp)
+					move.w	d6,-(sp)
+					move.w	#13,-(sp)
+					DOS	_IOCTRL
+					lea	10(sp),sp
+					move.w	(sp)+,d0
+					move.b	d0,＠MediaID(a6)
+				} @else {
+					move.b	XDPB_MediaID(a0),＠MediaID(a6)
+				}
+				move.l	a1,-(sp)
+				lea	＠MesBuf(a6),a0
+				bsr	?_PutDriveID
+				bsr	?_GetDrvCtrl
+				bsr	?_PutDriveCapa
+				bsr	?_PutDrvCtrl
+				bsr	?_PutVolume
+				bsr	?_Disp
+				move.l	(sp)+,a1
+			} @while.t;
+
+			ToUser
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+
+		  ?_GetLDriveNo::
+			* 論理ドライブ名を得る
+			moveq.l	#0,d0
+			move.b	DPBTable_DriveNo(a2),d0
+			move.l	d0,-(sp)
+			jsr	__GetLDriveNo
+			addq.w	#4,sp
+			moveq.l	#0,d6
+			move.b	d0,d6
+			addq.w	#1,d6
+			rts
+
+		  ?_PutDriveID::
+			* ドライブ名とSCSI IDを出力
+			move.b	#' ',(a0)+
+			moveq.l	#'A'-1,d0
+			add.b	d6,d0
+			move.b	d0,(a0)+
+			lea	[ ': ',0 ](pc),a1
+			StrCpy	(a1)+,(a0)+
+			subq.w	#1,a0
+
+			move.l	＠XDPBPtr(a6),a1
+			move.l	XDPB_DEVHPtr(a1),a1
+			lea	1+DEVH_Name(a1),a1
+			@repeat [ d0, #7-1 ].q {
+				move.b	(a1)+,(a0)+
+			}
+			move.w	＠FormatType(a6),d0
+			@switch [ d0 ].w {
+			  @case	#SDD_FormatType_X68000:
+				lea	[ '(X68) ',0 ](pc),a1
+				tst.l	＠SCSI_ID(a6)
+				@ifmi	{
+					lea	[ '(---) ',0 ](pc),a1
+				}
+				@break;
+			  @case	#SDD_FormatType_PC9801:
+				lea	[ '(NEC) ',0 ](pc),a1
+				@break;
+			  @case	#SDD_FormatType_FMTOWNS:
+				lea	[ '(FMT) ',0 ](pc),a1
+				@break;
+			  @case	#SDD_FormatType_IBMMO:
+				lea	[ '(IBM) ',0 ](pc),a1
+				@break;
+			  @case	#SDD_FormatType_IBMFDISK:
+				lea	[ '(FDI) ',0 ](pc),a1
+				@break;
+			  @case	#SDD_FormatType_ZIP:
+				lea	[ '(ZIP) ',0 ](pc),a1
+				@break;
+									*---------- TNB
+			  @case	#SDD_FormatType_2HD:
+				lea	[ '(2HD) ',0 ](pc),a1
+				@break;
+									*---------- TNB
+			  @case	#SDD_FormatType_ISO9660:
+				lea	[ '(IS9) ',0 ](pc),a1
+				@break;
+			  @default:
+				lea	[ '(---) ',0 ](pc),a1
+				@break;
+			}
+			StrCpy	(a1)+,(a0)+
+			subq.w	#1,a0
+
+			move.l	＠SCSI_ID(a6),d1
+			@ifpl	{
+				cmpi.b	#10,d1
+				@ifcc	{
+					add.b	#'A'-10,d1
+				} @else {
+					add.b	#'0',d1
+				}
+			} @else {
+				moveq.l	#'?',d1
+				moveq.l	#0,d1			*** TNB
+							* 以下、MEDIA ID によって
+							* SCSI かのチェックをやめて
+							* ます。でないと 2HD が
+							* [SUSIE recognizable drive]
+							* にならないので
+			}
+			move.b	＠MediaID(a6),d0
+			@switch [ d0 ].b {
+			  @case #$F4:
+				lea	[ 'SCSI DAT   ',0 ](pc),a1
+				@break;
+			  @case #$F5:
+				lea	[ 'SCSI CD-ROM',0 ](pc),a1
+				@break;
+			  @case #$F6:
+				lea	[ 'SCSI MO    ',0 ](pc),a1
+				@break;
+			  @case #$F7:
+				lea	[ 'SCSI HDD   ',0 ](pc),a1
+				@break;
+			  @case #$F8:
+				lea	[ 'SASI HDD   ',0 ](pc),a1
+				*moveq.l	#0,d1			*** TNB
+				@break;
+			  @case #$F9:
+				lea	[ 'RAM DISK   ',0 ](pc),a1
+				*moveq.l	#0,d1			*** TNB
+				@break;
+			  @case #$FA:
+				lea	[ '2HD(1.44MB)',0 ](pc),a1
+				*moveq.l	#0,d1			*** TNB
+				@break;
+			  @case #$FB:
+				lea	[ '2DD(640KB) ',0 ](pc),a1
+				*moveq.l	#0,d1			*** TNB
+				@break;
+			  @case #$FC:
+				lea	[ '2DD(720KB) ',0 ](pc),a1
+				*moveq.l	#0,d1			*** TNB
+				@break;
+			  @case #$FD:
+				lea	[ '2HC(1MB)   ',0 ](pc),a1
+				*moveq.l	#0,d1			*** TNB
+				@break;
+			  @case #$FE:
+				lea	[ '2HD(1MB)   ',0 ](pc),a1
+				*moveq.l	#0,d1			*** TNB
+				@break;
+			  @case #$FF:
+				lea	[ 'SCSI(void) ',0 ](pc),a1
+				tst.l	＠SCSI_ID(a6)
+				@ifmi	{
+					lea	[ 'Other      ',0 ](pc),a1
+					moveq.l	#0,d1
+				}
+				@break;
+			  @default:
+				lea	[ 'Other      ',0 ](pc),a1
+				moveq.l	#0,d1
+				@break;
+			}
+			StrCpy	(a1)+,(a0)+
+			subq.w	#1,a0
+			tst.b	d1
+			@ifne	{
+				move.l	d1,d0
+				swap	d0
+				cmpi.b	#8,d0
+				@ifcc	{
+					lea	[ '(ID',0 ](pc),a1
+					StrCpy	(a1)+,(a0)+
+					subq.w	#1,a0
+					move.b	d1,(a0)+
+					lea	[ '  ,U',0 ](pc),a1
+				} @else {
+					addi.b	#'0',d0
+					lea	[ '(ID',0 ](pc),a1
+					StrCpy	(a1)+,(a0)+
+					subq.w	#1,a0
+					move.b	d1,(a0)+
+					move.b	#'L',(a0)+
+					move.b	d0,(a0)+
+					lea	[ ',U',0 ](pc),a1
+				}
+			} @else {
+				lea	[ '(-----,U',0 ](pc),a1
+			}
+			StrCpy	(a1)+,(a0)+
+			subq.w	#1,a0
+			move.l	＠XDPBPtr(a6),a1
+			moveq.l	#'0',d0
+			add.b	XDPB_UnitNo(a1),d0
+			move.b	d0,(a0)+
+			lea	[ ') ',0 ](pc),a1
+			StrCpy	(a1)+,(a0)+
+			subq.w	#1,a0
+			rts
+
+		  ?_GetDrvCtrl::
+			* ドライブ状況を得る
+			move.w	d6,-(sp)
+			DOS	_DRVCTRL
+			addq.w	#2,sp
+			move.b	d0,d5
+			move.b	d5,d0
+			andi.b	#7,d0
+			cmpi.b	#2,d0
+			@ifeq	{
+				clr.l	＠IOCTRLBuf(a6)
+				pea	＠IOCTRLBuf(a6)
+				move.w	#-1,-(sp)
+				move.w	d6,-(sp)
+				move.w	#13,-(sp)
+				DOS	_IOCTRL
+				lea	10(sp),sp
+				@if [ cmpi.l #'SUSI',0+＠IOCTRLBuf(a6) ].ne @or
+				    [ cmpi.b #'E',4+＠IOCTRLBuf(a6) ].ne {
+					pea	＠IOCTRLBuf(a6)
+					move.w	#1,-(sp)
+					move.w	d6,-(sp)
+					move.w	#13,-(sp)
+					DOS	_IOCTRL
+					lea	10(sp),sp
+					tst.l	d0
+					@ifeq	{
+						tst.l	＠IOCTRLBuf(a6)
+						@ifmi	{
+							bset	#0,d5
+							tst.w	＠FormatType(a6)
+							@ifpl	{
+								move.w	#SDD_FormatType_ERROR2,＠FormatType(a6)
+							}
+						}
+					}
+				}
+			}
+			rts
+
+		  ?_PutDriveCapaMini::
+			* ドライブ容量を出力
+			move.b	d5,d0
+			andi.b	#7,d0
+			cmpi.b	#2,d0
+			@ifeq	{
+				move.l	＠XDPBPtr(a6),a1
+
+				move.b	＠MediaID(a6),d0
+				cmpi.b	#$f5,＠MediaID(a6)
+				@ifeq	{
+					* CD-ROMだけ特殊処理
+					pea	＠DSKFREBuf(a6)
+					move.w	d6,-(sp)
+					DOS	_DSKFRE
+					addq.w	#6,sp
+					move.w	4+＠DSKFREBuf(a6),d0
+					mulu	6+＠DSKFREBuf(a6),d0
+					lsr.l	#8,d0
+					mulu	2+＠DSKFREBuf(a6),d0
+					lsr.l	#2,d0
+				} @else {
+					move.w	XDPB_SecByte(a1),d0
+					mulu	XDPB_CluNum(a1),d0
+					move.b	XDPB_SftCluSec(a1),d1
+					lsl.l	d1,d0
+					move.w	XDPB_SecByte(a1),d1
+					mulu	XDPB_DataSec(a1),d1
+					add.l	d1,d0
+					moveq.l	#10,d1
+					lsr.l	d1,d0
+				}
+				subq.l	#3,d0
+				@ifcs	{
+					moveq.l	#0,d0
+				}
+				cmpi.l	#10000,d0
+				@ifcc	{
+					moveq.l	#10,d1
+					lsr.l	d1,d0
+					moveq.l	#4,d1
+					bsr	PrintDec
+					lea	[ 'M ',0 ](pc),a1
+					StrCpy	(a1)+,(a0)+
+					subq.w	#1,a0
+				} @else {
+					moveq.l	#4,d1
+					bsr	PrintDec
+					lea	[ 'K ',0 ](pc),a1
+					StrCpy	(a1)+,(a0)+
+					subq.w	#1,a0
+				}
+			} @else {
+				lea	[ '----- ',0 ](pc),a1
+				StrCpy	(a1)+,(a0)+
+				subq.w	#1,a0
+			}
+			rts
+
+		  ?_PutDriveCapa::
+			* ドライブ容量を出力
+			move.b	d5,d0
+			andi.b	#7,d0
+			cmpi.b	#2,d0
+			@ifeq	{
+				pea	＠DSKFREBuf(a6)
+				move.w	d6,-(sp)
+				DOS	_DSKFRE
+				addq.w	#6,sp
+				move.w	4+＠DSKFREBuf(a6),d2
+				mulu	6+＠DSKFREBuf(a6),d2
+				lsr.l	#8,d2
+				move.w	2+＠DSKFREBuf(a6),d3
+				sub.w	0+＠DSKFREBuf(a6),d3
+				mulu	d2,d3
+				lsr.l	#2,d3
+				move.w	2+＠DSKFREBuf(a6),d4
+				mulu	d2,d4
+				lsr.l	#2,d4
+
+				move.l	d3,d0
+				moveq.l	#8,d1
+				bsr	PrintDec
+				move.b	#'/',(a0)+
+				move.l	d4,d0
+				moveq.l	#8,d1
+				bsr	PrintDec
+				lea	[ ' (',0 ](pc),a1
+				StrCpy	(a1)+,(a0)+
+				subq.w	#1,a0
+				move.w	2+＠DSKFREBuf(a6),d0
+				sub.w	0+＠DSKFREBuf(a6),d0
+				move.w	2+＠DSKFREBuf(a6),d1
+				@ifne	{
+					mulu	#100,d0
+					divu	d1,d0
+					andi.l	#$ffff,d0
+				} @else {
+					moveq.l	#0,d0
+				}
+				moveq.l	#3,d1
+				bsr	PrintDec
+				lea	[ '%) ',0 ](pc),a1
+				StrCpy	(a1)+,(a0)+
+				subq.w	#1,a0
+			} @else {
+				lea	[ '--------/-------- (---%) ',0 ](pc),a1
+				StrCpy	(a1)+,(a0)+
+				subq.w	#1,a0
+			}
+			rts
+
+		  ?_PutDrvCtrl::
+			* ドライブ状況を出力
+			move.b	#'[',(a0)+
+			move.b	d5,d0
+			btst	#6,d0
+			@ifcl	{
+				move.b	#'R',(a0)+
+			} @else {
+				move.b	#'-',(a0)+
+			}
+			move.b	d5,d0
+			btst	#3,d0
+			@ifst	{
+				move.b	#'P',(a0)+
+			} @else {
+				move.b	#'-',(a0)+
+			}
+			lea	[ '] ',0 ](pc),a1
+			StrCpy	(a1)+,(a0)+
+			subq.w	#1,a0
+			rts
+
+		  ?_PutOption::
+			ToSuper
+			lea	[ '(',0 ](pc),a1
+			StrCpy	(a1)+,(a0)+
+			subq.w	#1,a0
+			move.l	＠XDPBPtr(a6),a1
+			move.l	XDPB_DEVHPtr(a1),a1
+			cmpi.l	#$012a5355,0+DEVH_Name(a1)	* $01,'*SU'
+			bne	?_PutOption_NonSUSIE
+			cmpi.l	#$5349452a,4+DEVH_Name(a1)	* 'SIE*'
+			bne	?_PutOption_NonSUSIE
+			move.l	a0,-(sp)
+			bsr	ClrSpOptionBuf
+			lea	__DEVD_HOOK-__SUSIEDEVH(a1),a0
+			lea	＠SpOptionBuf(a6),a1
+			moveq.l	#SDDCALL_GetSpecialOptionSDD,d0
+			jsr	(a0)
+			move.l	(sp)+,a0
+			bsr	GetSpOptionBuf
+			* VEWB
+			moveq.l	#'-',d0
+			move.b	＠Status_V(a6),d0
+			@switch [ d0 ].b {
+			  @case	#1:
+				move.b	#'V',d0
+				@break;
+			  @case	#2:
+				move.b	#'2',d0
+				@break;
+			  @case	#3:
+				move.b	#'3',d0
+				@break;
+			  @default:
+				moveq.l	#'-',d0
+				@break;
+			}
+			move.b	d0,(a0)+
+			moveq.l	#'-',d0
+			tst.b	＠Status_E(a6)
+			@ifst	{
+				move.b	#'E',d0
+			}
+			move.b	d0,(a0)+
+			moveq.l	#'-',d0
+			tst.b	＠Status_W(a6)
+			@ifst	{
+				move.b	#'W',d0
+			}
+			move.b	d0,(a0)+
+			moveq.l	#'-',d0
+			tst.b	＠Status_B(a6)
+			@ifst	{
+				move.b	#'B',d0
+			}
+			move.b	d0,(a0)+
+			moveq.l	#'-',d0
+			tst.b	＠Status_H(a6)
+			@ifst	{
+				move.b	#'H',d0
+			}
+			move.b	d0,(a0)+
+			*
+			move.b	#')',(a0)+
+			* -TI
+			lea	[ '   -',0 ](pc),a1
+			StrCpy	(a1)+,(a0)+
+			subq.w	#1,a0
+			move.l	＠Status_TI(a6),d0
+			@ifne	{
+				subq.w	#4,a0
+				moveq.l	#4,d1
+				bsr	PrintDec
+			}
+			* -TE
+			lea	[ '   -',0 ](pc),a1
+			StrCpy	(a1)+,(a0)+
+			subq.w	#1,a0
+			move.l	＠Status_TE(a6),d0
+			@ifne	{
+				subq.w	#4,a0
+				moveq.l	#4,d1
+				bsr	PrintDec
+			}
+			* -TW
+			lea	[ '   -',0 ](pc),a1
+			StrCpy	(a1)+,(a0)+
+			subq.w	#1,a0
+			move.l	＠Status_TW(a6),d0
+			@ifne	{
+				subq.w	#4,a0
+				moveq.l	#4,d1
+				bsr	PrintDec
+			}
+			bra	?_PutOption_e
+		  ?_PutOption_NonSUSIE::
+			lea	[ '-----)   -   -   -',0 ](pc),a1
+			StrCpy	(a1)+,(a0)+
+			subq.w	#1,a0
+		  ?_PutOption_e::
+			lea	[ ' ',0 ](pc),a1
+			StrCpy	(a1)+,(a0)+
+			subq.w	#1,a0
+			ToUser
+			rts
+
+		  ?_PutVolume::
+			* ボリューム名を出力
+			moveq.l	#'A'-1,d0
+			add.b	d6,d0
+			move.b	d0,(a0)+
+			lea	[ ':',0 ](pc),a1
+			StrCpy	(a1)+,(a0)+
+			subq.w	#1,a0
+			move.b	d5,d0
+			andi.b	#7,d0
+			cmpi.b	#2,d0
+			@ifeq	{
+				move.l	a0,-(sp)
+				lea	＠FILESNameBuf(a6),a0
+				moveq.l	#'A'-1,d0
+				add.b	d6,d0
+				move.b	d0,(a0)+
+				lea	[ ':\*.*',0 ](pc),a1
+				StrCpy	(a1)+,(a0)+
+				move.l	(sp)+,a0
+				move.w	#＃ATR_V,-(sp)
+				pea	＠FILESNameBuf(a6)
+				pea	＠FILESBuf(a6)
+				DOS	_FILES
+				lea	10(sp),sp
+				tst.l	d0
+				@ifpl	{
+					pea	＠NAMECKBuf(a6)
+					pea	ＳFLS_Name+＠FILESBuf(a6)
+					DOS	_NAMECK
+					addq.w	#8,sp
+					lea	ＳNCK_Name+＠NAMECKBuf(a6),a1
+					StrCpy	(a1)+,(a0)+
+					subq.w	#1,a0
+					lea	ＳNCK_Ext+＠NAMECKBuf(a6),a1
+					tst.b	(a1)+
+					@ifne	{
+						StrCpy	(a1)+,(a0)+
+						subq.w	#1,a0
+					}
+				} @else {
+					lea	[ '(No Volume Name)',0 ](pc),a1
+					StrCpy	(a1)+,(a0)+
+					subq.w	#1,a0
+				}
+			} @else {
+				lea	[ '** Not Inserted **',0 ](pc),a1
+				move.w	＠FormatType(a6),d0
+				@switch [ d0 ].b {
+				  @case	#SDD_FormatType_ERROR3:
+					lea	[ '** Unconnected **',0 ](pc),a1
+					@break;
+				  @case	#SDD_FormatType_ERROR2:
+					lea	[ '** Unrecognized **',0 ](pc),a1
+					@break;
+				  @case	#SDD_FormatType_Audio:
+					lea	[ '** Audio Only **',0 ](pc),a1
+					@break;
+				}
+				StrCpy	(a1)+,(a0)+
+				subq.w	#1,a0
+			}
+			rts
+
+		  ?_Disp::
+			lea	[ 13,10,0 ](pc),a1
+			StrCpy	(a1)+,(a0)+
+			subq.w	#1,a0
+			pea	＠MesBuf(a6)
+			DOS	_PRINT
+			addq.w	#4,sp
+			rts
+
+		}
+
+
+*************************************************************************
+
+
+*	void	PrintStatus2( void );
+*
+*		ステータス精細表示
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ PrintStatus2 ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			bsr	PrintStatus_GetSUSIEDeviceInfo
+			bsr	PrintStatus_Sub2
+
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	PrintStatusAll( void );
+*
+*		ステータス表示
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ PrintStatusAll ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			pea	[ '[SUSIE recognizable drive]',13,10,0 ](pc)
+			DOS	_PRINT
+			addq.w	#4,sp
+
+			moveq.l	#0,d7
+			moveq.l	#8-1,d6
+			tst.b	＠ReadyTWOSCSI(a6)
+			@ifst	{
+				moveq.l	#16-1,d6
+			}
+			@repeat [ d6 ].w {
+				move.l	d7,-(sp)
+				@repeat [ d5, #9-1 ].q {	* LUN対策
+					move.l	d7,＠CmdSCSI_ID(a6)
+					bsr	MakeID2Drive
+					bsr	PrintStatus_Sub3
+					addi.l	#$10000,d7
+				}
+				move.l	(sp)+,d7
+				addq.b	#1,d7
+			}
+
+			pea	[ '[SUSIE non-recognizable drive]',13,10,0 ](pc)
+			DOS	_PRINT
+			addq.w	#4,sp
+
+			move.l	#-1,＠CmdSCSI_ID(a6)
+			bsr	MakeID2Drive2
+			bsr	PrintStatus_Sub3
+
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	PrintStatusAll2( void );
+*
+*		ステータス精細表示
+*		in	なし
+*		out	なし
+
+
+		@xproc	[ PrintStatusAll2 ] {
+			movem.l	d1-d7/a0-a6,-(sp)
+
+			pea	[ '[SUSIE recognizable drive]',13,10,0 ](pc)
+			DOS	_PRINT
+			addq.w	#4,sp
+
+			moveq.l	#0,d7
+			moveq.l	#8-1,d6
+			tst.b	＠ReadyTWOSCSI(a6)
+			@ifst	{
+				moveq.l	#16-1,d6
+			}
+			@repeat [ d6 ].w {
+				move.l	d7,-(sp)
+				@repeat [ d5, #9-1 ].q {	* LUN対策
+					move.l	d7,＠CmdSCSI_ID(a6)
+					bsr	MakeID2Drive
+					bsr	PrintStatus_Sub4
+					addi.l	#$10000,d7
+				}
+				move.l	(sp)+,d7
+				addq.b	#1,d7
+			}
+
+			pea	[ '[SUSIE non-recognizeable drive]',13,10,0 ](pc)
+			DOS	_PRINT
+			addq.w	#4,sp
+
+			move.l	#-1,＠CmdSCSI_ID(a6)
+			bsr	MakeID2Drive2
+			bsr	PrintStatus_Sub4
+
+			movem.l	(sp)+,d1-d7/a0-a6
+			rts
+		}
+
+
+*************************************************************************
+
+
+*	void	PrintDec( void );
+*
+*		10進数を出力する。
+*		in	d0	数値
+*			d1	桁数
+*			a0	出力バッファ
+*		out	なし
+
+
+		@xproc	[ PrintDec ] {
+			@param	[ d0, Number ].l;
+			@param	[ d1, Column ].w;
+			@param	[ a0, Buf ].w;
+
+			movem.l	d0-d7/a1-a5,-(sp)
+
+			move.l	a0,a1
+			lea	?_Table(pc),a2
+			@do {
+				move.l	(a2),d2
+				@break.eq;
+				cmp.l	d2,Number
+				@break.cc;
+				addq.l	#4,a2
+			} @while.t;
+
+			moveq.l	#0,d4
+			tst.l	d2
+			@ifeq	{
+				move.b	#'0',(a1)+
+				addq.w	#1,d4
+			} @else {
+				@do {
+					move.l	(a2)+,d2
+					@break.eq;
+					moveq.l	#'0'-1,d3
+					@do {
+						addq.w	#1,d3
+						sub.l	d2,Number
+					} @while.cc;
+					add.l	d2,Number
+					move.b	d3,(a1)+
+					addq.w	#1,d4
+				} @while.t;
+			}
+			clr.b	(a1)
+			move.l	a1,a0
+			cmp.w	Column,d4
+			@ifcs	{
+				move.w	Column,d5
+				sub.w	d4,d5
+				lea	(a1,d5.w),a2
+				clr.b	(a2)
+				move.l	a2,a0
+				subq.w	#1,d4
+				@repeat [ d4 ].w {
+					move.b	-(a1),-(a2)
+				}
+				subq.w	#1,d5
+				@repeat [ d5 ].w {
+					move.b	#' ',-(a2)
+				}
+			}
+
+			movem.l	(sp)+,d0-d7/a1-a5
+			rts
+		  ?_Table::
+			dc.l	1000000000
+			dc.l	100000000
+			dc.l	10000000
+			dc.l	1000000
+			dc.l	100000
+			dc.l	10000
+			dc.l	1000
+			dc.l	100
+			dc.l	10
+			dc.l	1
+			dc.l	0
+		}
+
+
+*************************************************************************
+
+
+*	void	PrintHex( void );
+*
+*		16進数を出力する。
+*		in	d0	数値
+*			d1	桁数
+*			a0	出力バッファ
+*		out	なし
+
+
+		@xproc	[ PrintHex ] {
+			@param	[ d0, Number ].l;
+			@param	[ d1, Column ].w;
+			@param	[ a0, Buf ].w;
+
+			movem.l	d0-d7/a1-a5,-(sp)
+
+			move.l	a0,a1
+			lea	?_Table(pc),a2
+			@do {
+				move.l	(a2),d2
+				@break.eq;
+				cmp.l	d2,Number
+				@break.cc;
+				addq.l	#4,a2
+			} @while.t;
+
+			lea	?_Table2(pc),a3
+			moveq.l	#0,d4
+			tst.l	d2
+			@ifeq	{
+				move.b	#'0',(a1)+
+				addq.w	#1,d4
+			} @else {
+				@do {
+					move.l	(a2)+,d2
+					@break.eq;
+					moveq.l	#0,d3
+					@do {
+						addq.w	#1,d3
+						sub.l	d2,Number
+					} @while.cc;
+					add.l	d2,Number
+					move.b	(a3,d3.w),(a1)+
+					addq.w	#1,d4
+				} @while.t;
+			}
+			clr.b	(a1)
+			move.l	a1,a0
+			cmp.w	Column,d4
+			@ifcs	{
+				move.w	Column,d5
+				sub.w	d4,d5
+				lea	(a1,d5.w),a2
+				clr.b	(a2)
+				move.l	a2,a0
+				subq.w	#1,d4
+				@repeat [ d4 ].w {
+					move.b	-(a1),-(a2)
+				}
+				subq.w	#1,d5
+				@repeat [ d5 ].w {
+					move.b	#'0',-(a2)
+				}
+			}
+
+			movem.l	(sp)+,d0-d7/a1-a5
+			rts
+		  ?_Table::
+			dc.l	$10000000
+			dc.l	$1000000
+			dc.l	$100000
+			dc.l	$10000
+			dc.l	$1000
+			dc.l	$100
+			dc.l	$10
+			dc.l	$1
+			dc.l	0
+		  ?_Table2::
+			dc.b	'0123456789ABCDEF'
+			.even
+		}
+
+
+*************************************************************************
+
+
+*	void	PRINTHELP( void );
+*
+*		ヘルプ表示処理
+*		in	なし
+*		out	帰らない。_EXITする。
+
+
+		@xproc	[ PRINTHELP ] {
+			pea	[
+			       " SCSIデバイスドライバ。",13,10
+				13,10
+			       " Usage:	susie.x [Drv...] [Option]",13,10
+			       "	DEVICE = SUSIE.X [Drv...] [Option]",13,10
+			       " Drv:	対象ドライブを[A:]～[Z:][@:][*:]でひとつ以上指定します。",13,10
+			       " Option:-IDn	対象IDをnにします。",13,10
+			       "	-LUNn	対象LUNをnにします。",13,10
+			       "	-P	ステータスを表示します。",13,10
+			       "	-I	ステータスの表示を精細にします。",13,10
+			       "	-R	常駐解除します。",13,10
+			       "	-K	常駐時に元のドライバを保存します。",13,10
+			       "	-RS	SCSIバスリセットを行ないます。",13,10
+			       "	-Vn	nでベリファイ方法を決定します。0=Soft, 1=Hard, 2=Wrt&Verify, 3=なし。",13,10
+			       "	-En	n=1でEject状態、n=0でEject状態を解除します。",13,10
+			       "	-Wn	n=1でProtect状態、n=0でProtect状態を解除します。",13,10
+			       "	-Bn	n=1でBusy待ちを行ない、n=0で行ないません。",13,10
+			       "	-Hn	n=1で高速認識モード、n=0で行ないません。",13,10
+			       "	-Un	n=1で機器未接続時でも常駐、n=0で行ないません。常駐時のみ有効。",13,10
+			       "	-RBn	n=1でMac resourceを表示し、n=0で行ないません。",13,10
+			       "	-AAn	n=1で非互換CDPlayモード、n=0で互換CDPlayモード。",13,10
+			       "	-TIn	Insert監視間隔をn/100秒にします。def=100",13,10
+			       "	-TEn	Eject監視間隔をn/100秒にします。def=100",13,10
+			       "	-TWn	リトライ待ち時間をn/100秒にします。def=20",13,10
+			       "	-Cn	内部バッファサイズをnにします。常駐時のみ有効。def=16(CD-ROM),8(other)",13,10
+			       "	-SI	メッセージを抑制します。",13,10
+				0
+			](pc)
+			DOS	_PRINT
+			addq.w	#4,sp
+
+			bsr	RemainSubst
+
+			tst.b	(DeviceInstalled)
+			bst	DDD_INSTALL_Err_Quit
+
+			DOS	_EXIT
+		}
+
+
+*************************************************************************
+
+
+		.even
+		@STRSEC;
+		.even
+
+
+*************************************************************************
+
+
+		.bss
+		.even
+		ds.b	SizeOfWork
+		.even
+BSSEND::
+		.stack
+STACKEND::
+
+		* 常駐時バッファ確保用ダミー
+		ds.b	(MAXCDROMCacheBufSize-DEFCDROMCacheBufSize)*SoftVerifyBufSecSize	=	2048
+
+PEND::
+		.end	EXEC_START
+
+
+

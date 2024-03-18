@@ -1,0 +1,150 @@
+*	Device Driver Header
+*	Copyright (C)1994-95 GORRY.
+*	$Id: sddhed.ap,v 1.3 1995/05/21 14:46:34 GORRY Exp GORRY $
+
+
+		@APSTART;
+		@STRINGS;
+
+
+		.include	GORRY\GORRY.MAC
+		.include	DevDrv.MAC
+
+		.include	sdd.def
+		.include	keep.def
+		.include	DevDrv.def
+
+
+*************************************************************************
+
+
+		.text
+
+__FirstDEVH::
+		dc.l	-1		* DEVH_NextDEVHPtr
+		dc.w	$8000		* DEVH_Flag
+		dc.l	DStrategyEntry	* DEVH_StrategyPtr
+		dc.l	DInterruptEntry	* DEVH_InterruptPtr
+		dc.b	'*SUSIE:)'	* DEVH_Name
+
+__SUSIEDEVH::
+		dc.l	-1		* DEVH_NextDEVHPtr
+		dc.w	$4040		* DEVH_Flag
+		dc.l	StrategyEntry	* DEVH_StrategyPtr
+		dc.l	InterruptEntry	* DEVH_InterruptPtr
+		dc.b	1,'*SUSIE*'	* DEVH_Name
+
+__DEVD_HOOK::
+		jmp	DEVD_HOOK
+
+
+*************************************************************************
+
+
+		dc.b	'$Id: sddhed.ap,v 1.3 1995/05/21 14:46:34 GORRY Exp GORRY $',0
+		.even
+
+
+*************************************************************************
+
+
+DRequestHeaderPtr::	ds.l	1
+
+
+DStrategyEntry::
+		move.l	a5,(DRequestHeaderPtr)
+		rts
+
+DInterruptEntry::
+		movem.l	d1-d7/a0-a6,-(sp)
+
+		move.l	(DRequestHeaderPtr),a5
+		jsr	__DDD_INSTALL
+		move.b	d0,REQH_ErrCodeL(a5)
+		ror.w	#8,d0
+		move.b	d0,REQH_ErrCodeH(a5)
+		ror.w	#8,d0
+
+		movem.l	(sp)+,d1-d7/a0-a6
+		rts
+
+
+*************************************************************************
+
+
+RequestHeaderPtr::	ds.l	1
+
+
+StrategyEntry::
+		move.l	a5,(RequestHeaderPtr)
+		rts
+
+InterruptEntry::
+		movem.l	d1-d7/a0-a6,-(sp)
+
+		move.l	(RequestHeaderPtr),a5
+
+		move.w	(SDDMode),d0
+		@switch [ d0 ].w {
+		  @case	#0:
+			moveq.l	#0,d0
+			move.b	REQH_CommandCode(a5),d0
+
+			cmpi.b	#$18,d0
+			@ifcs	{
+				add.w	d0,d0
+				add.w	d0,d0
+				lea	DEVD_JpTable,a0
+				move.l	(a0,d0.w),a0
+				jsr	(a0)
+			} @else {
+				move.w	#$5003,d0
+			}
+			@break;
+
+		  @case	#1:
+			moveq.l	#0,d0
+			move.b	REQH_CommandCode(a5),d0
+			andi.w	#$7f,d0
+			subi.b	#$40,d0
+			@ifcs	{
+				move.w	#$5003,d0
+			} @else {
+				cmpi.b	#$18+1,d0
+				@ifcs	{
+					add.w	d0,d0
+					add.w	d0,d0
+					lea	DEVD2_JpTable,a0
+					move.l	(a0,d0.w),a0
+					jsr	(a0)
+				} @else {
+					move.w	#$5003,d0
+				}
+			}
+			@break;
+
+		  @default:
+			move.w	#$5003,d0
+			@break;
+		}
+
+		move.b	d0,REQH_ErrCodeL(a5)
+		ror.w	#8,d0
+		move.b	d0,REQH_ErrCodeH(a5)
+		ror.w	#8,d0
+
+		movem.l	(sp)+,d1-d7/a0-a6
+		rts
+
+
+*************************************************************************
+
+
+		.even
+		@STRSEC;
+		.even
+
+
+*************************************************************************
+
+
