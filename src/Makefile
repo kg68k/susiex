@@ -1,12 +1,15 @@
 
 include	SUSIEVER.MAK
-include	DEEJVER.MAK
-include	SSLUNVER.MAK
+#include	DEEJVER.MAK
+#include	SSLUNVER.MAK
 
 CC	=	GCC
-LD	=	GCC
-AS	=	HAS
-AP	=	AP
+AS	=	has060
+AP	=	ap
+
+ifndef LD
+LD	=	hlk
+endif
 
 CFLAGS	=	-c -O -g -funsigned-char -fno-inline-functions -fcombine-regs
 LDFLAGS	=	
@@ -15,15 +18,16 @@ APFLAGS	=	-H
 
 LIBS	=	-ldos -lfloat
 
-x		:	test2.x susie.x Calibrate.x deej.x SSLUN.x
+#x		:	test2.x susie.x Calibrate.x deej.x SSLUN.x
+all: susie.x
 
 %.o	:	%.c
 	$(CC) $(CFLAGS) $<
 
 %.o	:	%.ap
 	$(AP) $(APFLAGS) $< $(basename $<).has
-	$(AS) $(ASFLAGS) $(basename $<).has -s SUSIEVERH=$(SUSIEVERH) -s SUSIEVERM=$(SUSIEVERM) -s SUSIEVERL=$(SUSIEVERL) -s SUSIEVERR=$(SUSIEVERr) > err.err
-	rm $(basename $<).has err.err %AP*.*
+	$(AS) $(ASFLAGS) $(basename $<).has -s SUSIEVERH=$(SUSIEVERH) -s SUSIEVERM=$(SUSIEVERM) -s SUSIEVERL=$(SUSIEVERL) -s SUSIEVERR=$(SUSIEVERr)
+	rm -f $(basename $<).has %AP*.*
 
 test2.x		:	test2.o	devdrv.o
 	$(LD) $(LDFLAGS) $(LIBS) $^ -o $@

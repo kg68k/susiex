@@ -7,11 +7,11 @@
 		@STRINGS;
 
 
-		.include	DOSCALL.MAC
-		.include	IOCSCALL.MAC
+		.include	doscall.mac
+		.include	iocscall.mac
 
-		.include	GORRY\GORRY.MAC
-		.include	DevDrv.mac
+		.include	gorry.mac
+		.include	devdrv.mac
 		.include	sdd.mac
 
 		.include	DevDrv.def

@@ -1,0 +1,256 @@
+*	Macro Define for GORRY.
+*	Version 1.20 : Programmed by GORRY.
+
+
+*	$Id: GORRY.mac,v 1.2.0.6 1994/10/15 01:37:41 GORRY Exp GORRY $
+
+
+*	*	*	*	*	*	*	*	*	*
+*	ストリーム固定値
+
+＃STDIN:	equ	0		* 標準入力
+＃STDOUT:	equ	1		* 標準出力
+＃STDERR:	equ	2		* 標準エラー出力
+＃STDPRN:	equ	3		* プリンタ
+
+*	*	*	*	*	*	*	*	*	*
+*	キャラクタ固定値
+
+＃EOF:		equ	26
+＃CR:		equ	13
+＃LF:		equ	10
+＃TAB:		equ	9
+＃NULL:		equ	0
+
+*	*	*	*	*	*	*	*	*	*
+*	ファイルアトリビュート固定値
+
+＃ATR_X:	equ	$80		* 実行属性
+＃ATR_L:	equ	$40		* リンク
+＃ATR_A:	equ	$20		* アーカイブ（通常ファイル）
+＃ATR_D:	equ	$10		* ディレクトリ
+＃ATR_V:	equ	$08		* ボリュームラベル
+＃ATR_S:	equ	$04		* システム
+＃ATR_H:	equ	$02		* 隠し
+＃ATR_R:	equ	$01		* リードオンリー
+
+*	*	*	*	*	*	*	*	*	*
+*	ファイルシーク固定値
+
+＃SEEK_SET:	equ	0		* 先頭から
+＃SEEK_CUR:	equ	1		* 現在位置から
+＃SEEK_END:	equ	2		* 最後尾から
+
+*	*	*	*	*	*	*	*	*	*
+*	ファイルオープン固定値
+
+＃OPEN_R:	equ	0		* 読み込み
+＃OPEN_W:	equ	1		* 書き込み
+＃OPEN_RW:	equ	2		* 読み書き
+
+＃OPEN_SHARE_C:		equ	0	* 互換モード
+＃OPEN_SHARE_RW:	equ	4	* 読み書き禁止
+＃OPEN_SHARE_R:		equ	8	* 読み込み禁止
+＃OPEN_SHARE_W:		equ	12	* 書き込み禁止
+＃OPEN_SHARE_A:		equ	16	* 許可
+
+＃OPEN_DIC:	equ	128		* 辞書をオープンする
+
+*	*	*	*	*	*	*	*	*	*
+*	FILES構造体
+
+		.offset	0
+ＳFLS:		ds.b	21		* ワークエリア
+ＳFLS_Atr:	ds.b	1		* 属性
+ＳFLS_Time:	ds.w	1		* 時間
+ＳFLS_Date:	ds.w	1		* 日付
+ＳFLS_Len:	ds.l	1		* ファイルサイズ
+ＳFLS_Name:	ds.b	23		* ファイル名
+		.even
+SizeOfＳFLS:
+		.text
+
+*	*	*	*	*	*	*	*	*	*
+*	NAMECK構造体
+
+		.offset 0
+ＳNCK_Drv:	ds.b	2		* ドライブ名
+ＳNCK_Dir:	ds.b	64+1		* ディレクトリ名
+ＳNCK_Name:	ds.b	18+1		* ファイル名
+ＳNCK_Ext:	ds.b	1+3+1		* 拡張子
+		.even
+SizeOfＳNCK:
+		.text
+
+*	*	*	*	*	*	*	*	*	*
+*	GETDPB構造体
+
+		.offset 0
+ＳDPB_Drv:	ds.b	1		* ドライブ番号
+ＳDPB_Unit:	ds.b	1		* デバイスドライバで使うユニット番号
+ＳDPB_Byte:	ds.w	1		* １セクタのバイト数
+ＳDPB_Sec:	ds.b	1		* １クラスタのセクタ数
+ＳDPB_Shift:	ds.b	1		* クラスタ・セクタ間のシフト数
+ＳDPB_FatSec:	ds.w	1		* FATの先頭セクタ番号
+ＳDPB_FatSuu:	ds.b	1		* FAT領域の個数
+ＳDPB_FatLen:	ds.b	1		* 1FATのセクタ数
+ＳDPB_DirSuu:	ds.w	1		* ルートディレクトリ領域の個数
+ＳDPB_DataSec:	ds.w	1		* データ領域の先頭セクタ番号
+ＳDPB_MaxFat:	ds.w	1		* 総クラスタ数＋１（FATの最大値）
+ＳDPB_DirSec:	ds.w	1		* ルートディレクトリ領域の先頭セクタ番号
+ＳDPB_DevPtr:	ds.l	1		* デバイスドライバへのポインタ
+ＳDPB_ID:	ds.b	1		* メディアバイト
+ＳDPB_Flag:	ds.b	1		* DPB使用フラグ
+ＳDPB_Next:	ds.l	1		* 次のDPBへのポインタ
+ＳDPB_DirFat:	ds.w	1		* カレントディレクトリのクラスタ番号
+ＳDPB_DirBuf:	ds.b	64		* カレントディレクトリ名
+		.even
+SizeOfＳDPB:
+		.text
+
+
+*	*	*	*	*	*	*	*	*	*
+*	DOSコールのエラーを検知する
+
+CheckErr	macro
+	.ifdef	__MAINDB__
+		bsr	KeepNowAdr
+	.endif
+		tst.l	d0
+		bmi	Error
+		endm
+
+*	*	*	*	*	*	*	*	*	*
+*	DOSコールのエラーを検知する（MALLOC,SETBLOCK用）
+
+CheckMemErr	macro
+	.ifdef	__MAINDB__
+		bsr	KeepNowAdr
+	.endif
+		tst.l	d0
+		bmi	Error_MEM
+		endm
+
+*	*	*	*	*	*	*	*	*	*
+*	文字列をコピー
+
+StrCpy		macro	n1,n2
+		local	l1
+l1:
+		move.b	n1,n2
+		bne	l1
+		endm
+
+*	*	*	*	*	*	*	*	*	*
+*	文字列の最後をポイント
+
+StrEnd		macro	n1
+		local	l1
+l1:
+		tst.b	n1
+		bne	l1
+		endm
+
+*	*	*	*	*	*	*	*	*	*
+*	英大文字に変換
+
+ToUpper		macro	n1
+		local	l1
+		cmpi.b	#'a',n1
+		bcs	l1
+		cmpi.b	#'z'+1,n1
+		bcc	l1
+		subi.b	#'a'-'A',n1
+l1:
+		endm
+
+*	*	*	*	*	*	*	*	*	*
+*	英小文字に変換
+
+ToLower		macro	n1
+		local	l1
+		cmpi.b	#'A',n1
+		bcs	l1
+		cmpi.b	#'Z'+1,n1
+		bcc	l1
+		addi.b	#'a'-'A',n1
+l1:
+		endm
+
+*	*	*	*	*	*	*	*	*	*
+*	$00で終わる文字列
+
+Message		macro	n1,n2
+		.data
+n1:
+		dc.b	n2
+		dc.b	0
+		.text
+		endm
+
+*	*	*	*	*	*	*	*	*	*
+*	CR,LF,$00で終わる文字列
+
+MesCR		macro	n1,n2
+		.data
+n1:
+		dc.b	n2
+		dc.b	13,10,0
+		.text
+		endm
+
+*	*	*	*	*	*	*	*	*	*
+*	BELL,CR,LF,$00で終わる文字列
+
+MesBCR		macro	n1,n2
+		.data
+n1:
+		dc.b	n2
+		dc.b	7,13,10,0
+		.text
+		endm
+
+*	*	*	*	*	*	*	*	*	*
+*	スーパーバイザモードにする
+
+ToSuper:	macro
+		clr.l	-(sp)
+		DOS	_SUPER
+		move.l	d0,(sp)
+		endm
+
+*	*	*	*	*	*	*	*	*	*
+*	ユーザーモードにする
+
+ToUser:		macro
+		.local	l1
+		tst.l	(sp)
+		bmi	l1
+			DOS	_SUPER
+		l1:
+		addq.w	#4,sp
+		endm
+
+*	*	*	*	*	*	*	*	*	*
+*	レジスタ保存
+
+PUSHREG:	macro	flag
+PUSHREGflag = flag
+	.if PUSHREGflag.eq.0
+		movem.l	SAVEREGS,-(sp)
+	.else
+		movem.l	SAVEREGS/a5,-(sp)
+		lea	LocalWork(pc),a5
+	.endif
+		endm
+
+*	*	*	*	*	*	*	*	*	*
+*	レジスタ復帰
+
+POPREG:	macro
+	.if PUSHREGflag.eq.0
+		movem.l	(sp)+,SAVEREGS
+	.else
+		movem.l	(sp)+,SAVEREGS/a5
+	.endif
+		endm

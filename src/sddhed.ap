@@ -1,5 +1,6 @@
 *	Device Driver Header
 *	Copyright (C)1994-95 GORRY.
+*	Copyright (C)2024 TcbnErik.
 *	$Id: sddhed.ap,v 1.3 1995/05/21 14:46:34 GORRY Exp GORRY $
 
 
@@ -7,8 +8,7 @@
 		@STRINGS;
 
 
-		.include	GORRY\GORRY.MAC
-		.include	DevDrv.MAC
+		.include	devdrv.mac
 
 		.include	sdd.def
 		.include	keep.def

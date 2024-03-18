@@ -7,13 +7,14 @@
 		@STRINGS;
 
 
-		.include	DOSCALL.MAC
-		.include	IOCSCALL.MAC
+		.include	doscall.mac
+		.include	iocscall.mac
+		.include	scsicall.mac
 
-		.include	GORRY\GORRY.MAC
-		.include	DevDrv.MAC
-		.include	sdd.MAC
-		.include	sddcall.MAC
+		.include	gorry.mac
+		.include	devdrv.mac
+		.include	sdd.mac
+		.include	sddcall.mac
 
 		.include	sddhed.def
 		.include	keep.def
@@ -7704,4 +7705,3 @@ SetBufferSize::
 *************************************************************************
 
 
-

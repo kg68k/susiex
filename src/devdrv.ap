@@ -7,9 +7,9 @@
 		@STRINGS;
 
 
-		.include	DOSCALL.MAC
-		.include	GORRY\GORRY.MAC
-		.include	DevDrv.MAC
+		.include	doscall.mac
+		.include	gorry.mac
+		.include	devdrv.mac
 
 
 *************************************************************************
