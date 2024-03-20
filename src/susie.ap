@@ -1,5 +1,6 @@
 *	System of Universal SCSI Integrated Engine
 *	Copyright 1994-95 GORRY.
+*	Copyright (C)2024 TcbnErik.
 *	$Id: susie.ap,v 1.24 1997/09/10 01:48:15 GORRY Exp GORRY $
 
 
@@ -250,19 +251,18 @@ EXEC_START::
 		@xproc	[ INIT2 ] {
 			movem.l	d1-d7/a0-a5,-(sp)
 
-			* TWOSCSIチェック
-			SCSI $1e
-			cmpi.b	#-2,d0
-			@ifeq	{
-				st.b	＠ReadyTWOSCSI(a6)
-			}
-
 			ToSuper
 			move.l	($00b8.w),＠DOSERRVectorKeep(a6)
 			jsr	InstallSCSICALL
 			tst.l	d0
 			bmi	ERROR_SCSICALL
 			ToUser
+
+			* TWOSCSIチェック
+			* SCSI IOCSの有効化より先に行わないこと。
+			SCSI $1e			* _S_TW_CHK
+			cmpi.b	#-2,d0
+			seq.b	＠ReadyTWOSCSI(a6)
 
 			move.w	#DEFCDROMCacheBufSize,d0
 			jsr	SetBufferSize
