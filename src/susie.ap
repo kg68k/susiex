@@ -358,10 +358,17 @@ EXEC_START::
 				tst.w	＠CmdDrvCnt(a6)
 				bne	?_Err
 			} @else {
+				cmpi.b	#'Z',d0
+				bhi	?_Err
 				cmpi.b	#'@',d0
 				bcs	?_Err
-				cmpi.b	#'Z'+1,d0
-				bcc	?_Err
+				@ifne	{		* A-Z
+					tst.b	(DeviceInstalled)
+					@ifst	{	* CONFIG.SYSで登録する場合はA:～Z:は指定不可
+						cmpi.b	#':',(a2)
+						beq	ERROR_LetterDrive
+					}
+				}
 			}
 			cmpi.b	#':',(a2)
 			bne	?_Err
@@ -2733,6 +2740,10 @@ EXEC_START::
 
 		  ?_C_Param::
 			lea	[ "-Cの範囲は2～32です。",13,10,0 ](pc),a1
+			bra	?_PRINT
+
+		  ?_LetterDrive::
+			lea	[ "CONFIG.SYSで登録する場合はドライブ名A:～Z:は指定できません。",13,10,0 ](pc),a1
 			bra	?_PRINT
 
 		  ?_CMD::
