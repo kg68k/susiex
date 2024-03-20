@@ -3802,7 +3802,7 @@ EXEC_START::
 				addq.b	#1,d7
 			}
 
-			pea	[ '[SUSIE non-recognizeable drive]',13,10,0 ](pc)
+			pea	[ '[SUSIE non-recognizable drive]',13,10,0 ](pc)
 			DOS	_PRINT
 			addq.w	#4,sp
 
