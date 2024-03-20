@@ -1058,11 +1058,15 @@ DEVD_HOOK::
 
 		  ?_Entry::
 			move.l	REQH_DataBufferPtr(a5),a0
-			move.w	#$0800,$00(a0)
-			move.b	#$f5,$14(a0)
-			moveq.l	#$f2,d0
-			move.l	d0,REQH_Result(a5)
+			move.b	#$f5,$16-2(a0)		$16:メディアバイト
 			moveq.l	#0,d0
+			move.w	#$0800,(a0)+		$02:1セクタあたりのバイト数
+			move.w	d0,(a0)+		$04:セクタ数-1/クラスタ、$05:シフト数
+			move.l	d0,(a0)+		$06:FATセクタ番号、$08:FAT個数、$09:FATセクタ数
+			move.l	d0,(a0)+		$0a:ルートエントリ数、$0c:データセクタ番号
+			move.w	#1,(a0)+		$0e:総クラスタ数+1
+			move.w	d0,(a0)+		$10:ルートセクタ番号
+			move.l	d0,REQH_Result(a5)
 
 		  ?_Quit::
 			movem.l	(sp)+,d1-d7/a0-a6
@@ -4322,8 +4326,7 @@ ConvertCDROMCacheAddress::
 			move.b	REQH_SeekMode(a5),d0
 			beq	?_SEEK_SET
 			cmpi.b	#1,d0
-			beq	?_SEEK_CUR
-			bra	?_SEEK_END
+			bne	?_SEEK_END
 
 		  ?_SEEK_CUR::
 			add.l	$06(a0),d6
@@ -4336,11 +4339,8 @@ ConvertCDROMCacheAddress::
 			bra	?_Result
 
 		  ?_SEEK_END::
-			move.l	$40(a0),d0
-			sub.l	d6,d0
-			bcs	?_Err_Offset
-			move.l	d0,$06(a0)
-			bra	?_Result
+			add.l	$40(a0),d6
+			bra	?_SEEK_SET
 
 		  ?_Err_Offset::
 			moveq.l	#$e7,d0
@@ -5517,12 +5517,12 @@ ConvertCDROMCacheAddress::
 				cmpi.l	#'D001',2(a1)
 				beq	?_CDROM_ISO9660_OK
 				cmpi.l	#'DROM',2(a1)
-				beq	?_CDROM_ISO9660_OK
-				bra	>
+				bne	>
 			  ?_CDROM_ISO9660_OK:
 				move.w	#SDD_FormatType_ISO9660,(FormatType)
 				move.l	(FindDataTOC_DataAddress),(CDROM_DataAddress)
 				move.w	$82(a1),(CDROM_SectorSize)
+				st.b	(SCSI_WriteProtectFlag)
 			}
 
 		  ?_GetFormat_Special_Next::
@@ -6566,6 +6566,10 @@ ConvertCDROMCacheAddress::
 
 
 		  ?_GetIPLSec_ZIP::
+			* ZIPは1パーティションのみ
+			cmpi.w	#MAXDPB-1,d7
+			bne	?_GetIPLSec_Unready
+
 			* MS-DOSパーティションであることを確認
 		.if 0 * 判定方法不明
 			lea	48(a2),a2

@@ -294,7 +294,8 @@ EXEC_START::
 			movem.l	d1-d7/a0-a5,-(sp)
 
 			move.w	#＃STDERR,-(sp)
-			pea	[ 'SUSIE: System of Universal SCSI Integrated Engine : V'
+			pea	[ 'SUSIEX 1.0.0 Copyright 2024 TcbnErik.',13,10,' based on '
+				  'SUSIE: System of Universal SCSI Integrated Engine : V'
 				  '0'+SUSIEVERH
 				  '.'
 				  '0'+SUSIEVERM
