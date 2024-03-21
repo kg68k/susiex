@@ -1,7 +1,12 @@
+# Makefile for SUSIEX
 
 include	SUSIEVER.MAK
 #include	DEEJVER.MAK
 #include	SSLUNVER.MAK
+
+SRCDIR_MK = ../srcdir.mk
+SRC_DIR = ../src
+-include $(SRCDIR_MK)
 
 CC	=	GCC
 AS	=	has060
@@ -17,6 +22,15 @@ ASFLAGS	=	-w -m68000
 APFLAGS	=	-H
 
 LIBS	=	-ldos -lfloat
+
+U8TOSJ	=	u8tosj
+CP_P	=	cp -p
+STRIP	=	strip -p
+ZIP	=	zip -9
+
+SSE_121A_LZH	= SSE_121A.LZH
+SRC_ZIP		= src.zip
+SUSIEX_ZIP	= susiex.zip
 
 #x		:	test2.x susie.x Calibrate.x deej.x SSLUN.x
 all: susie.x
@@ -66,27 +80,25 @@ susie.doc	:	susie.ntf
 	ntf -t -kl 2 $^ > $@
 
 
-rcs		:	UPDATE.LOG
-		ci -l -tnul Makefile *.MAK *.ap *.c *.def *.h *.mac *.ntf TECH.DOC verup.doc< UPDATE.LOG
+archive: $(SUSIEX_ZIP)
 
-arc		:	SSE_$(SUSIEVERN).LZH
+$(SUSIEX_ZIP): $(SSE_121A_LZH) $(SRC_ZIP) susie.x CHANGELOG.txt README.txt
+	$(STRIP) susie.x
+	rm -f $@
+	$(ZIP) $@ $^
 
-SSE_$(SUSIEVERN).LZH	:	susie.x deej.x SSLUN.x susie.doc verup.doc 使用規定.DOC SOURCE.LZH
-	lha u $@ $^
+$(SSE_121A_LZH):
+	$(CP_P) $(SRC_DIR)/../archives/$@ $@
 
-SOURCE.LZH	:	Makefile SUSIEVER.MAK DEEJVER.MAK SSLUNVER.MAK \
-			devdrv.ap keep.ap pstart.ap sdd.ap sddhed.ap susie.ap \
-			deej.ap \
-			SSLUN.c \
-			test2.c \
-			keep.def pstart.def sdd.def sddhed.def devdrv.def susie.def \
-			devdrv.h \
-			devdrv.mac sdd.mac sddcall.mac susie.mac sddcall.h \
-			deej.mac \
-			susie.ntf \
-			TECH.DOC \
-			Calibrate.has \
-			Calibrate.x
-	lha u $@ $^
+$(SRC_ZIP): devdrv.ap DevDrv.def devdrv.mac gorry.mac keep.ap keep.def \
+            Makefile pstart.ap pstart.def sdd.ap sdd.def sdd.mac sddcall.mac \
+            sddhed.ap sddhed.def susie.ap susie.def susie.mac SUSIEVER.MAK
+	rm -f $@
+	$(ZIP) $@ $^
 
+CHANGELOG.txt: $(SRC_DIR)/../CHANGELOG.md
+	$(U8TOSJ) < $^ >! $@
+
+README.txt: $(SRC_DIR)/../README.md
+	$(U8TOSJ) < $^ >! $@
 
